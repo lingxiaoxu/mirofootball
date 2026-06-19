@@ -1,0 +1,17 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# env / secrets (never commit)
+.env
+*.env
+.env.*
+
+# python / node (in case impl lands here later)
+__pycache__/
+*.pyc
+node_modules/
