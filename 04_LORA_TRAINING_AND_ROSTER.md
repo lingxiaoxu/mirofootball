@@ -237,6 +237,93 @@ SFTTrainer(model=Gemma_bf16, peft_config=peft, train_dataset=team_ds,
 
 ---
 
+## 10. 双 DGX Spark：在 Box B 训练 → 迁移回 Box A（详细 guide · 2026-06）
+
+> **现实**：本机(Box A)显存被 nemotron(94G)+两 gemma 占着,**不在 Box A 上训练**。用户有**两台 DGX Spark,桥接**。**Box A = 服务/跑比赛(本机, :11434 nemotron + :11436/:11437 gemma + :7000 engine + neo4j,绝不停)**;**Box B = 训练机**。LoRA 训好(小文件)再搬回 Box A 挂载。
+>
+> ⚠️ **此文档是 public 仓库,严禁写入任何真实 token/key**。HF token、API-FOOTBALL key **只存在 `~/mirofootball/.env`(gitignored)**;下面一律以变量名引用,真实值从 .env 读/搬。
+
+### 10.0 角色与数据流
+```
+Box A(本机/服务)                         Box B(训练)
+  备 SFT 数据(不耗 GPU)  ──rsync(桥, 小)──▶  下底座(HF, 直连不走桥) + 训 LoRA
+  挂 LoRA + 跑比赛       ◀──rsync(桥, 几MB)── 产出 LoRA gguf(每队几 MB)
+```
+**走桥的只有小件**(repo/SFT 数据/.env/LoRA gguf,KB~MB 级);**大件(10G 底座)Box B 自己从 HF 下,不走慢桥**(对齐 00 §9.2 / 06 §3.2)。
+
+### 10.1 密钥(从 Box A 的 .env 搬,绝不入库/打印)
+`~/mirofootball/.env`(gitignored,chmod 600)含:
+```
+API_FOOTBALL_KEY=<在 .env 里,见 dashboard.api-football.com>
+HF_TOKEN=<在 .env 里,见 huggingface.co/settings/tokens; 已对 google/gemma-4-E2B-it 有访问权>
+```
+搬到 Box B:`rsync -a Box_A:~/mirofootball/.env ~/mirofootball/.env`(走桥,一次)。**Box B 上的 assistant：开工先读 `~/mirofootball/.env` 拿 token/key,不要 echo、不要写进任何 tracked 文件。**
+
+### 10.2 Box A 备料(现在就能做,不耗 GPU、不碰模型)
+1. `brain/pull_api.py` → `data/api/`(WC2026 + 8 队全端点,已拉)。
+2. `brain/data_map.py` → `data/teams_engine/<Team>.json`(真实 11 人含门将 + skill,已生成)。
+3. `brain/style_extract.py` → `data/styles/<Team>.json`(从 team stats 抽 team_style 向量,§4)。**待写**。
+4. `brain/build_sft.py` → `data/sft/<Team>.jsonl`(SFT 样本,§5.1 格式:system=OFFBALL_SYS / user=world+me+team_style / assistant=合法 JSON 决策;由 Stage-0 自博弈轨迹 + 结果/风格双过滤生成)。**待写**。
+
+### 10.3 搬到 Box B
+```bash
+rsync -a Box_A:~/mirofootball/ ~/mirofootball/ --exclude .venv --exclude 'serving/ollama*' --exclude data/api
+# 关键带上: brain/ data/sft/ data/teams_engine/ data/styles/ .env serving/Modelfile.* serving/make_team_model.sh
+```
+
+### 10.4 Box B 训练栈 + 训练
+```bash
+# arm64 训练栈(plan §7): 优先 NVIDIA NGC PyTorch 容器(GB10/arm64); 或 pip
+pip install torch transformers peft trl accelerate datasets
+huggingface-cli login --token "$HF_TOKEN"     # 从 .env 读, 别明文
+# 下可训练底座(全精度, ~10G, Box B 直连 HF):
+huggingface-cli download google/gemma-4-E2B-it --local-dir models/gemma4-e2b-it
+# 每队一个 LoRA(train_team_lora.py, §7 骨架: PEFT LoraConfig r=16 + SFTTrainer, bf16)
+for T in France Argentina Netherlands Japan Norway Germany Spain Brazil; do
+  python brain/train_team_lora.py --base models/gemma4-e2b-it --data data/sft/$T.jsonl --out lora/$T
+done
+# 显存: Box B 也只剩有限显存 → bf16 LoRA(冻底座, 仅训适配器)约需 ~12-16G;
+#   不够则 4-bit QLoRA(bitsandbytes, arm64 留意 §7); 或减小 batch/seq_len。
+```
+产出:`lora/<Team>/`(adapter_model.safetensors + adapter_config.json,每个**几 MB~几十 MB**)。
+
+### 10.5 LoRA → GGUF(给 Ollama ADAPTER)
+```bash
+# llama.cpp 把 safetensors LoRA 转成 Ollama 能挂的 gguf
+python llama.cpp/convert_lora_to_gguf.py lora/$T --base models/gemma4-e2b-it --outfile serving/lora/$T.gguf
+```
+⚠️ gemma4 是新架构,确认 llama.cpp 的 convert_lora_to_gguf 支持;不支持则跟进 llama.cpp 版本。
+
+### 10.6 搬回 Box A
+```bash
+rsync -a Box_B:~/mirofootball/serving/lora/ Box_A:~/mirofootball/serving/lora/   # 每队几 MB, 走桥秒级
+```
+
+### 10.7 Box A 挂载 + 切换(零额外改动,机制已就位)
+```bash
+# 为每队从 QAT 底座派生挂 LoRA 的 Ollama 模型(serving/make_team_model.sh 已写)
+serving/make_team_model.sh France serving/lora/France.gguf 11436
+serving/make_team_model.sh Germany serving/lora/Germany.gguf 11437
+# 对阵切换(如 France↔Germany → Brazil↔Argentina): 换 model 名重 create 即可(秒级, 比赛边界切换)
+```
+MatchDirector 把 home/away 的 `model` 指向 `gemma-<team>`(config.py 加 per-team 覆盖;现在是固定 `gemma4:e2b-it-qat`)。换名单(22人)= 载入 `data/teams_engine/<Team>.json`(已能做)。
+
+### 10.8 体积:训练后**不会变大**
+底座仍是 **QAT ~2.5G(加载)**;LoRA 适配器 **几 MB~几十 MB**。`gemma-<team>` = QAT 底座 + 小适配器 ≈ **还是 ~2.5G/实例**。两 gemma + nemotron 的内存账不变(用户的 2-3GB 担忧不成立)。
+> 注:LoRA 在 **bf16 全精度底座**上训,挂到 **QAT(int4)底座**上推理——可行且小;若发现质量损失,可改在 QAT 兼容底座上训或评估门槛(§8)回退。
+
+### 10.9 验证(§8 门槛,在 Box A 跑)
+带 LoRA 跑 N 场 → JSON 合法率 100% + 风格统计逼近 team_style(KL↓) + 不劣于纯 prompt;过门槛才进 registry,否则回退 prompt。
+
+### 10.10 Box B 上的 assistant 开工须知(到那台机让我读本节)
+1. **读 `~/mirofootball/.env`** 拿 `HF_TOKEN`/`API_FOOTBALL_KEY`(别 echo/入库)。
+2. 数据在 `data/sft/`(训练集)、`data/teams_engine/`(名单)、`data/styles/`(风格);没有就先在 Box A 用 §10.2 的脚本生成再 rsync。
+3. 训练栈见 §10.4;每队产 `lora/<Team>`;转 gguf 见 §10.5;搬回见 §10.6。
+4. **Box B 是训练机**,可自由用 GPU;但**别去碰 Box A 的 :11434/:11435/:11436/:11437**(那是服务机的常驻模型,见记忆 ops-constraints)。
+5. 严格按本 plan(04 §3-§9)的数据映射/风格锚定/双过滤/评估门槛,不简化。
+
+---
+
 ## Sources
 - 代码核实：[footballSimulationEngine `validate.js`/`init_config`](https://github.com/OWNER/footballSimulationEngine-test) · [MiroFish `config.py`/`simulation_manager.py`/`llm_client.py`](https://github.com/OWNER/MiroFish-Offline-Test)
 - vLLM Multi-LoRA / 运行时加载 · PEFT/TRL · NVIDIA NGC PyTorch(GB10/arm64)
