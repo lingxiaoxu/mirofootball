@@ -477,6 +477,28 @@ async def run_many(matches):
 
 ---
 
+## 11. 已有数据接入（Mac 预测盘数据 + API-FOOTBALL · 两台 box 怎么取）
+
+> 用户已有数据,两条来源。**所有 key 在 `~/mirofootball/.env`(gitignored),绝不写进本仓库**;变量名引用。
+
+### 11.1 Mac 预测盘数据（Tailscale + HTTP, x-api-key）
+- Mac(Tailscale 节点 macbook-pro-6)跑数据服务,HTTP `:3001`,header `x-api-key`(值 = .env `MAC_DATA_KEY`)。
+- 已确认端点:`GET /data/reach_round.json` —— 各队**晋级各轮的 model 概率 vs 场内 Yes 价 + edge**(Polymarket Global + Kalshi)。完整文件清单见 `REMOTE_DATA_ACCESS.md`(Mac 经 Taildrop 推到 Box A;取它需 `tailscale operator`/sudo,或让 Mac 把它丢进 `/data/` 直接 HTTP 取)。
+- 取法:`curl -s -H "x-api-key: $MAC_DATA_KEY" http://<mac-tailscale-ip>:3001/data/<file>.json`
+- **两台 box 怎么取**:
+  - **Box A** 在 Tailscale 上 → 直接 curl Mac,存 `data/mac/`。
+  - **Box B 不在 Tailscale** → 经 Box A:Box A 取好 → rsync 过 ConnectX 桥(169.254 直连)给 Box B;或 Box B `tailscale up` 自行加入。
+- 存放:小件留 Box A 无妨;大批量按 ops 约束放 **Box B**(磁盘空 821G)。
+
+### 11.2 API-FOOTBALL（WC2026 + 国家队数据）
+- key = .env `API_FOOTBALL_KEY`(Pro, 7500/天)。`brain/pull_api.py` 已拉 **WC2026(league=1,season=2026)+ 8 队全端点** → `data/api/`(限速 0.5s/次、断点续传)。
+- 两台都能**公网直连** api-football,各自拉或 Box A 拉后 rsync。可继续按需补拉(injuries/predictions/odds/players…)。
+- 派生:`brain/data_map.py` → `data/teams_engine/`(真实 11 人含门将);`brain/style_extract.py` → `data/styles/`(team_style)。
+
+> ⚠️ guide(`REMOTE_DATA_ACCESS.md`)全文待取(Taildrop 需 sudo;助手无 sudo 密码)。取到后补全本节文件清单。
+
+---
+
 ## Sources
 - [NVIDIA DGX Spark Hardware](https://docs.nvidia.com/dgx/dgx-spark/hardware.html) · [DGX Spark 产品页](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)
 - [Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) · [vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.6-35B-A3B) · [Gemma 4 E2B](https://huggingface.co/google/gemma-4-E2B)
