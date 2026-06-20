@@ -495,7 +495,13 @@ async def run_many(matches):
 - 两台都能**公网直连** api-football,各自拉或 Box A 拉后 rsync。可继续按需补拉(injuries/predictions/odds/players…)。
 - 派生:`brain/data_map.py` → `data/teams_engine/`(真实 11 人含门将);`brain/style_extract.py` → `data/styles/`(team_style)。
 
-> ⚠️ guide(`REMOTE_DATA_ACCESS.md`)全文待取(Taildrop 需 sudo;助手无 sudo 密码)。取到后补全本节文件清单。
+### 11.3 output JSON 清单（方法 A 已全部拉到 data/mac/）
+`worldcup_model`(夺冠/晋级概率+金靴) · `reach_round`(48队×各轮 模型% vs 庄家¢+edge) · `upcoming`(模型3-way+报价+下注) · `inplay_live`(进行中+战术+大小球) · **`team_styles`**(10风格码+每队 metrics{possession,pass_pct,shots,xg,directness,chance_q}) · **`squad`**(score_z强度/ga_per90/top_players) · `form` · `performance_report`/`risk_report`/`oos_report`/`backtest` · `param_sweep`/`xv_matches`/`milestone_marks`/`schedule`/`frontend_overview`。
+> `team_styles`+`squad` 已接入 `brain/style_extract.py`(真实风格 metrics + 强度 → team_style 向量,替代稀疏 API-FOOTBALL 抽取)。
+
+### 11.4 方法 B：整库 wc.db（关系/历史，需 Mac 远程登录）
+`sqlite3 .../wc.db ".backup /tmp/wc_snap.db"` → `rsync xuling@<mac>:/tmp/wc_snap.db ./`(或 taildrop)。关键表:`fixture`/`team`/`standing`/`prediction`/`price_tick`(~32万行逐分钟价)/`sim_champion`/`player`/`squad`/`match_odds`/`fixture_event`。列:`.schema <表>`。方法 C = Cloudflare tunnel(公网备用)。
+> 完整指南(含真实 IP/路径)在 `data/mac/REMOTE_DATA_ACCESS.md`(gitignored 本地副本)。
 
 ---
 
