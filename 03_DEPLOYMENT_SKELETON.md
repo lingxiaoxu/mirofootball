@@ -54,43 +54,85 @@ mirofootball/
 
 ---
 
+## 1.5 MiroFish → mirofootball 文件级改造对照（实读核实）
+
+> 把 `MiroFish-Offline-Test-main/backend` 的件**逐个映射**到 mirofootball,标清"复用/改/丢/新写"。核心结论:**reuse 直连 LLMClient + ConfigGenerator + ReportAgent + Runner + KG;丢整个 camel/OASIS;新写引擎壳 + tick + 两类 agent**。
+
+| MiroFish 源（backend/app） | → mirofootball | 改动 |
+|---|---|---|
+| `utils/llm_client.py`（OpenAI `/v1`） | `brain/llm_client.py` | 🔧 **改成 Ollama 原生 `/api/chat` + think + format**（§4，关键）；开 3 实例 |
+| `services/simulation_config_generator.py`（LLM 生成 config） | `brain/match_director.py` | ♻️ 复用机制，换 **match config schema**（02 §1，带真实均值目标） |
+| `services/simulation_manager.py`（SimulationManager/State） | `brain/match_director.py` | ♻️ 顶层导演：tick 循环 + 比分/控球/状态（01 §1.2） |
+| `services/report_agent.py`（ReACT 工具循环，模型无关） | `brain/report_agent.py` | ♻️ 复用 ReACT；工具换 **football tools**（查比赛数据,非 Neo4j 也可） |
+| `services/simulation_runner.py`（后台/日志） | `brain/orchestrator.py` | ♻️ 复用后台/日志；`env.step` 批量模式 → 改成**调引擎 tick**（00 §4.1） |
+| `storage/neo4j_*` `graph_builder` `graph_memory_updater` | `brain/kg/` | ♻️ 复用 KG；schema 换 match/team/player/state（00 §6）；**MVP 可不接** |
+| `storage/embedding_service.py`（nomic-embed） | （可选） | 仅 KG 文档检索用；**MVP 不接**（05 §3.7） |
+| `utils/retry.py` | `brain/utils/` | ♻️ 原样复用 |
+| `scripts/run_{twitter,reddit,parallel}_simulation.py` | ❌ 丢 | camel/OASIS 社交,整块删 |
+| `services/oasis_profile_generator.py` · OASIS env/recsys | ❌ 丢 | 社交人格/推荐图 |
+| `camel-ai` / `camel-oasis` 依赖 | ❌ 丢 | 核心不依赖（仅上面脚本用）；丢后解除 Python<3.12 |
+| —（新写） | `engine/server.js` | 🆕 引擎 HTTP 壳 + 静音 + 可选 seed（§3） |
+| —（新写） | `brain/agents/team_agent.py` · `ball_agent.py` | 🆕 两队 gemma 批 / brain 持球+第一防守者（§5） |
+| —（新写） | `brain/{world,inject}.py`（zone↔坐标 / build_world / inject_*） | 🆕 编排工具（05 §3.6） |
+| —（新写） | `data_map.py`（FC26→引擎 + role→position）| 🆕 名单映射（04 §3.2） |
+
+> **"确定能这样调三模型"**：✅ 已实跑验证（3 模型并发 + 链式 brain→gemma）。唯一须落实的改造 = `llm_client.py` 走原生 `/api/chat`（上表第一行）；其余是复用 + 新写黏合层。**机制已证,代码待写(P2/P3)。**
+
+---
+
 ## 2. serving/ — 模型服务（当前实跑 Ollama，目标态 vLLM）
 
 > ⭐ **当前实跑 = Ollama，三模型同时在跑：1 个共享 nemotron-120b + 2 个独立 gemma4:e2b**（满足"必须两个 gemma"）。§2.0 现在就能起；§2.1 vLLM 脚本保留作目标态。
 
-### 2.0 当前实跑：Ollama —— 三模型同时跑（brain 共享 + 两个独立 gemma）
+### 2.0 当前实跑：Ollama —— 三模型同时跑（✅ 2026-06-20 已实测验证）
 
-**Ollama 加载语义（关键，决定"真两个 gemma"）**：Ollama 按**模型名**识别已加载实例。对同一名字 `gemma4:e2b` 发两路请求 → **只加载一份**权重 + 用 `OLLAMA_NUM_PARALLEL` 开并行 slot（= 一个 gemma 服务两队，**不要**）。**要两个独立实例 → 用两个不同模型名**：用 Modelfile 从 `gemma4:e2b` 派生 `gemma-home`/`gemma-away`（底座相同，将来各挂 LoRA）→ Ollama 当两个不同模型、**各加载一份** → 内存里真有两个 gemma。
-
+**已落地拓扑（实跑确认,3 模型并存）：**
 ```
-共享 daemon :11434  ── nemotron-3-super:120b  (已驻, 只读发请求, 绝不碰/不重载/不改 num_ctx)
-mirofootball 自有 daemon :11435  ┬─ gemma-home  (FROM gemma4:e2b, 独立加载)
-                                 └─ gemma-away  (FROM gemma4:e2b, 独立加载)
+:11434  nemotron-3-super:120b   systemd ollama 0.22.1  (共享 brain, 只读, 绝不碰/不重载/不改 num_ctx)
+:11435  ollama-auth-proxy.js    .nemoclaw 的 token 认证代理 → 转发 :11434  (nemotron 远程访问链路, 绝不碰)
+:11436  gemma4:e2b-it-qat       独立 daemon + 独立库 ollama_home   (home, 加载 ~2.5G)  ← 真实例 1
+:11437  gemma4:e2b-it-qat       独立 daemon + 独立库 ollama_away   (away, 加载 ~2.5G)  ← 真实例 2
 ```
-内存：94(brain)+~2(home)+~2(away)+~1(infra) ≈ 100GB / 127.5GB ✅。加载/驱逐只在 :11435 内，共享 brain 永不受影响。
+**踩过的 4 个真坑(都已解决,记录备查)：**
+1. **`:11435` 被占** = nemoclaw 认证代理(非空闲)→ gemma 改用 **:11436 / :11437**。
+2. **"派生两个模型名"会被去重**：两个 Modelfile 若仅差 `SYSTEM` → digest 相同 → Ollama 当**同一 runner**(`ollama ps` 只剩一个)。**要真两个实例 → 两个独立 daemon + 两个独立 `OLLAMA_MODELS` 目录(两份物理副本)**,最稳。
+3. **默认 `gemma4:e2b`/`e2b-it-q4_K_M` 太大**：磁盘 7.2G、**加载 ~7.8G**(含多模态),两个 + nemotron(94G) **超 121G 装不下**。**必须用 `gemma4:e2b-it-qat`**(磁盘 4.3G、**加载仅 ~2.5G**,即使 128K ctx)→ 两个才 ~5G,装得下(实测 used 112G/121G, avail 9G)。
+4. **QAT 需新版 Ollama**：系统 0.22.1 拉 QAT 报 `412 requires newer version`。→ 本地(无 sudo)装 **ollama 0.30.10** 仅给 gemma daemon 用;nemotron 的 systemd 0.22.1 不动。
 
 ```bash
-# serving/start_ollama_gemma.sh  —— mirofootball 自有 Ollama 实例(独立端口+独立模型目录, 零干扰共享 daemon)
-OLLAMA_HOST=localhost:11435 \
-OLLAMA_MODELS=$HOME/mirofootball/serving/ollama_models \
-OLLAMA_MAX_LOADED_MODELS=2 \          # ← 关键: 允许 2 个 gemma 同时常驻
-OLLAMA_NUM_PARALLEL=4 \               # 每个 gemma 的并发 slot(批 10-11 人)
-OLLAMA_KEEP_ALIVE=-1 \                # 永不自动卸载(只对我们这台; 共享 daemon 不碰)
-ollama serve &
+# (一次性) 本地装新版 ollama 给 gemma 用(systemd 那个 0.22.1 跑 nemotron, 不碰)
+#   tarball: https://github.com/ollama/ollama/releases/download/v0.30.10/ollama-linux-arm64.tar.zst
+#   解到 ~/mirofootball/serving/ollama-new/ ; 运行时 LD_LIBRARY_PATH 指 ollama-new/lib/ollama
+NEW=~/mirofootball/serving/ollama-new/bin/ollama
+export LD_LIBRARY_PATH=~/mirofootball/serving/ollama-new/lib/ollama
 
-OLLAMA_HOST=localhost:11435 ollama pull gemma4:e2b-it-q4_K_M
-# serving/Modelfile.home:  FROM gemma4:e2b-it-q4_K_M   (将来加 ADAPTER ./lora/home, 见 04 §6.1)
-# serving/Modelfile.away:  FROM gemma4:e2b-it-q4_K_M   (将来加 ADAPTER ./lora/away)
-OLLAMA_HOST=localhost:11435 ollama create gemma-home -f serving/Modelfile.home
-OLLAMA_HOST=localhost:11435 ollama create gemma-away -f serving/Modelfile.away
-OLLAMA_HOST=localhost:11435 ollama run gemma-home "ok" >/dev/null   # 预热进显存
-OLLAMA_HOST=localhost:11435 ollama run gemma-away "ok" >/dev/null
+# 两个独立 daemon + 两个独立库(两份物理 QAT 副本)
+for pair in "11436 ollama_home" "11437 ollama_away"; do set -- $pair
+  OLLAMA_HOST=localhost:$1 OLLAMA_MODELS=$HOME/mirofootball/serving/$2 \
+  OLLAMA_KEEP_ALIVE=-1 OLLAMA_MAX_LOADED_MODELS=1 nohup $NEW serve >/dev/null 2>&1 & disown
+done
+OLLAMA_HOST=localhost:11436 $NEW pull gemma4:e2b-it-qat   # 第一份
+OLLAMA_HOST=localhost:11437 $NEW pull gemma4:e2b-it-qat   # 第二份(独立库 → 物理两份)
+OLLAMA_HOST=localhost:11436 $NEW run gemma4:e2b-it-qat "hi" >/dev/null   # 预热
+OLLAMA_HOST=localhost:11437 $NEW run gemma4:e2b-it-qat "hi" >/dev/null
 
-# 验收: 三个模型真同时在跑
-curl -s localhost:11434/api/ps   # 期望 nemotron-3-super:120b
-curl -s localhost:11435/api/ps   # 期望 gemma-home + gemma-away 两个都在
+# 验收: 3 模型同时在跑
+curl -s localhost:11434/api/ps   # nemotron
+OLLAMA_HOST=localhost:11436 $NEW ps   # gemma home
+OLLAMA_HOST=localhost:11437 $NEW ps   # gemma away
 ```
-> brain 不用我们起（已在共享 :11434 跑）；mirofootball 只对它**发推理请求**。两 daemon 共用同一 GPU/统一内存池没问题。
+
+**开机自启（systemd user service + linger,已配并验证）：**
+```bash
+# ~/.config/systemd/user/ollama-gemma-home.service  (away 同, 改 11437 + ollama_away)
+#   ExecStart=%h/mirofootball/serving/ollama-new/bin/ollama serve
+#   Environment=OLLAMA_HOST=localhost:11436 / OLLAMA_MODELS=%h/.../ollama_home
+#   Environment=OLLAMA_KEEP_ALIVE=-1 / OLLAMA_MAX_LOADED_MODELS=1
+#   Environment=LD_LIBRARY_PATH=%h/mirofootball/serving/ollama-new/lib/ollama ; Restart=always
+systemctl --user enable --now ollama-gemma-home ollama-gemma-away
+loginctl enable-linger $USER     # 无需登录也开机自启(已 Linger=yes)
+```
+> 两 gemma 实测各答各的、互不串(home "2+2"→4 / away "sky color"→Blue)。两个加载稳定都 ~2.5G(早先 ps 看到 1.9 vs 2.5 只是查询瞬间 KV/compute buffer 计数差,非真实差异)。两 daemon 共用同一 GPU/统一内存池,brain 全程未受影响。
 
 ### 2.1 目标态：vLLM 三实例（HOST，arm64/Blackwell）
 
@@ -179,51 +221,45 @@ app.listen(7000, 'localhost', () => console.log('engine on :7000'))
 > ⭐ **当前实跑 = Ollama，但 brain 与 gemma 分两处（隔离铁律：绝不碰共享 brain）**：
 > - **brain = `nemotron-3-super:120b`** 是**共享模型，被 web 其它服务在用** → mirofootball **只把它当只读外部推理端点**：仅发 chat 请求，**绝不 reload/evict/重启其 server，绝不覆盖 `num_ctx`**（改 ctx 会触发整模型重载 = 打断共享方）。发请求时**不传 num_ctx**（用它已加载的 256K），不传强制重配项。
 > - **两队 `gemma4:e2b` 跑在 mirofootball 自己的独立 Ollama 实例/端口**（如 `OLLAMA_HOST=localhost:11435`，设它自己的 `OLLAMA_MAX_LOADED_MODELS≥2`）→ 加载 gemma **不会驱逐共享 brain**，两边内存仍在同一 128GB 池但互不重载。
-> - client 同时支持 **vLLM `guided_json`** 与 **Ollama `format`** 两种 schema 约束解码（#2 解法）；MiroFish `LLMClient` 已自动剥 `<think>`，**保留 brain 的 thinking 不影响 JSON**。**#6：不强制关 thinking**（brain 共享、不为我们重配），`think` 默认不传 = 用模型默认（开）。
+> - ⚠️ **必须走 Ollama 原生 `/api/chat`，不能用 OpenAI `/v1`**（实测 2026-06）：`/v1` **不认 `think` 开关**，且 reasoning 输出进独立 `reasoning` 字段、**吃光 `max_tokens` → `content` 空**（gemma 给 300 token 全被思考吃光仍空）。原生 `/api/chat` 才能控 `think` + 拿 `format` 的 JSON。**MiroFish `LLMClient` 默认走 `/v1`，故"mirofish→mirofootball"必须把 client 改成原生 `/api/chat`**（这是关键改造点，见 §1.5）。
+> - ✅ **reasoning 已定（2026-06）：brain `think=True`（开）· gemma `think=False`（关）**。依据(实测):开 reasoning 每次先吐"Thinking Process",gemma 0.7s→**3–7.5s/次**;gemma 是高频量层(~20 人×每 10–15 拍×整场),开则单场从几分钟变**几小时**,且跑位是"选 zone+姿态"选择题、思维链增益小 → **关**(用 format 约束直接出短 JSON)。brain 是低频战略层(持球点/赛前 config/赛后解说),思考提质 → **开**。
 
 ```python
-# brain/llm_client.py  —— OpenAI 兼容; 批处理在服务层(并发请求自动合批)
-# 纯网络IO; 用async并发把一队请求让服务端合批 → 关键提速
-import asyncio, json
-from openai import AsyncOpenAI
+# brain/llm_client.py  —— Ollama 原生 /api/chat (think 可控 + format schema); 批处理靠 async 并发
+# ⚠️ 不用 OpenAI /v1 (它不认 think、reasoning 吃光 max_tokens → content 空)
+import asyncio, httpx, json
 
 class LLM:
-    def __init__(self, base_url: str, model: str, lora: str | None = None,
-                 serving: str = "ollama", think: bool | None = None):
-        self.cli = AsyncOpenAI(base_url=base_url, api_key="local")  # 本地服务忽略key
-        self.model, self.lora = model, lora
-        # serving∈{"ollama","vllm"}; think=None=不传(用模型默认,共享brain保持thinking开); 仅显式False才关
-        self.serving, self.think = serving, think
-
-    def _schema_extra(self, schema: dict) -> dict:
-        # #2 严格 schema 约束解码 —— 按服务选透传方式; #6 不强制关 thinking
-        if self.serving == "vllm":
-            extra = {"guided_json": schema}                                  # vLLM(outlines/xgrammar)
-        else:
-            extra = {"format": schema}                                       # Ollama 原生 structured outputs(≥0.5.0)
-            if self.think is False: extra["think"] = False                   # 仅显式要求才关(默认不传→thinking开)
-            # ⚠️ 绝不传 num_ctx → 避免触发共享 brain 重载(隔离铁律)
-        if self.lora: extra["model"] = self.lora        # vLLM multi-LoRA 选适配器; Ollama 用派生模型名(下行 model=)
-        return extra
+    def __init__(self, base_url: str, model: str, serving: str = "ollama", think: bool = False):
+        # base_url 用 主机:端口(原生 /api, 不带 /v1), 如 http://localhost:11436
+        self.base = base_url.rstrip("/"); self.model = model
+        self.serving, self.think = serving, think     # gemma 热路径 think=False(快); brain 可 True
 
     async def decide(self, system: str, user: dict, schema: dict, max_tokens: int = 64):
-        r = await self.cli.chat.completions.create(
-            model=self.lora or self.model,              # Ollama: "nemotron-3-super:120b"/"gemma4:e2b"/"gemma-home"
-            messages=[{"role":"system","content":system},
-                      {"role":"user","content":json.dumps(user, ensure_ascii=False)}],
-            max_tokens=max_tokens, temperature=0.7,
-            extra_body=self._schema_extra(schema))
-        txt = r.choices[0].message.content
-        return json.loads(txt)                          # schema 已保证合法; 仍可包 try + 手工修复兜底(见 02 §6)
+        msgs = [{"role":"system","content":system},
+                {"role":"user","content":json.dumps(user, ensure_ascii=False)}]
+        if self.serving == "vllm":                    # 目标态: vLLM OpenAI /v1 + guided_json
+            from openai import AsyncOpenAI
+            cli = AsyncOpenAI(base_url=f"{self.base}/v1", api_key="local")
+            r = await cli.chat.completions.create(model=self.model, messages=msgs,
+                    max_tokens=max_tokens, temperature=0.7, extra_body={"guided_json": schema})
+            return json.loads(r.choices[0].message.content)
+        # 当前实跑: Ollama 原生 /api/chat
+        body = {"model": self.model, "stream": False, "messages": msgs,
+                "format": schema,                     # 原生 structured output → 合法 JSON
+                "think": self.think,                  # ⚠️ 只有原生 /api 认; gemma=False 快, brain 可 True
+                "options": {"num_predict": max_tokens}}  # ⚠️ 绝不传 num_ctx(防共享 brain 重载)
+        async with httpx.AsyncClient() as c:
+            r = await c.post(f"{self.base}/api/chat", json=body, timeout=180)
+        return json.loads(r.json()["message"]["content"])  # think 在独立字段; content 是纯 JSON
 
-    async def batch(self, system, users, schema, max_tokens=24):
-        # 一队并发 → 服务端连续批处理合成一个batch (真并行, 见 00 §4)
+    async def batch(self, system, users, schema, max_tokens: int = 64):
         return await asyncio.gather(*[self.decide(system, u, schema, max_tokens) for u in users])
 ```
-> **三实例怎么开（Ollama 版，brain/gemma 分两个 server）**：
-> - `brain=LLM("http://localhost:11434/v1","nemotron-3-super:120b")`（**共享 server，只读发请求，think 不传=保持 thinking 开，不传 num_ctx**）；
-> - `home=LLM("http://localhost:11435/v1","gemma4:e2b")`、`away=LLM("http://localhost:11435/v1","gemma4:e2b")`（**mirofootball 自己的独立 Ollama 实例 :11435**，加载 gemma 不驱逐共享 brain；有 LoRA 后换 `gemma-home`/`gemma-away`）。
-> **走 MiroFish 直连路线，不用 camel 全局 env。**
+> **三实例（Ollama 原生 /api，base_url 用 主机:端口 不带 /v1）**：
+> - `brain=LLM("http://localhost:11434","nemotron-3-super:120b", think=True)`（共享 server，只读；reasoning 开）
+> - `home=LLM("http://localhost:11436","gemma4:e2b-it-qat", think=False)`、`away=LLM("http://localhost:11437","gemma4:e2b-it-qat", think=False)`（自有两 daemon；reasoning 关求快）
+> **走直连路线，不用 camel 全局 env。**
 
 ---
 
@@ -304,9 +340,9 @@ async def simulate_match(team1, team2, pitch):
         kg   = KG(CFG.NEO4J_URI)                                    # MVP 可先不接(05 §3.7 #5)
 
         # 两队 = 两个独立 Ollama 模型名 @:11435(真两个 gemma 实例, §2.0); 持球走共享 brain
-        gh = TeamGemma(CFG.GEMMA_URL, CFG.GEMMA_HOME)   # model='gemma-home'
-        ga = TeamGemma(CFG.GEMMA_URL, CFG.GEMMA_AWAY)   # model='gemma-away'
-        qb = BallQwen(CFG.BRAIN_URL, CFG.BRAIN_MODEL)   # 持球决策 → 共享 nemotron
+        gh = TeamGemma(CFG.GEMMA_HOME_URL, CFG.GEMMA_MODEL)  # :11436 home 独立实例(gemma4:e2b-it-qat)
+        ga = TeamGemma(CFG.GEMMA_AWAY_URL, CFG.GEMMA_MODEL)  # :11437 away 独立实例(同模型, 不同 daemon → 真两个)
+        qb = BallQwen(CFG.BRAIN_URL, CFG.BRAIN_MODEL)        # 持球决策 → 共享 nemotron
 
         md = await engine_call(http, "initiate", {"team1":team1,"team2":team2,"pitch":pitch})
         kg.bootstrap(md)
@@ -379,8 +415,9 @@ volumes: { neo4j_data: {} }
 
 ```bash
 # 当前实跑(Ollama): brain 共享只读 + 两个独立 gemma 在自有实例(§2.0)
-BRAIN_URL=http://localhost:11434/v1      ; BRAIN_MODEL=nemotron-3-super:120b   # 共享 daemon, 只读不碰
-GEMMA_URL=http://localhost:11435/v1      ; GEMMA_HOME=gemma-home ; GEMMA_AWAY=gemma-away  # 自有 daemon, 两个独立模型名
+BRAIN_URL=http://localhost:11434/v1       ; BRAIN_MODEL=nemotron-3-super:120b   # 共享 daemon(:11434), 只读不碰; 远程经 :11435 token 代理
+GEMMA_HOME_URL=http://localhost:11436/v1  ; GEMMA_AWAY_URL=http://localhost:11437/v1   # 两个独立 daemon(实跑验证, §2.0)
+GEMMA_MODEL=gemma4:e2b-it-qat              # QAT 版(加载 ~2.5G, 两个+nemotron 装得下; 默认 7.2G 版装不下)
 ENGINE_URL=http://localhost:7000
 NEO4J_URI=bolt://localhost:7687          ; NEO4J_AUTH=neo4j/<SET_YOUR_PASSWORD>   # MVP 可先不接
 ITER_PER_HALF=2000                        ; GEMMA_EVERY=12     # 速度/保真旋钮(00 §9.1)

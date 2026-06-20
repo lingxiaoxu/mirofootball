@@ -10,6 +10,7 @@
 > - **动作只从引擎的离散集里选**：`shoot, throughBall, pass, cross, tackle, intercept, slide, run, sprint, cleared, boot, penalty`。
 > - **属性接地**：把该球员 `skill` + 位置 + 体能注入 → 不同能力/位置决策不同。
 > - **粗网格 zone**：球场切成 `col(A–F) × row(1–9)` 的 54 格；LLM 只对 zone 推理，引擎把 zone → 精确坐标 + 按 `agility/fitness` 夹紧位移。
+> - ⚠️ **brain 可插拔 + reasoning 已定 + 约束解码现状**：下文"Qwen"= brain 角色,当前实跑为 **nemotron-120b**。**reasoning 已定:brain `think=True`(开)、gemma `think=False`(关)**(03 §4)——走 Ollama 原生 `/api/chat`,thinking 在独立字段、`content` 是纯 JSON(不在 content 里混 `<think>`)。端口 `:8001-8003` 为目标态,当前见 03 §8;约束解码用 **Ollama `format=<schema>`**(等效 vLLM `guided_json`,挂 schema 即可)。
 
 ---
 
@@ -41,31 +42,50 @@
 
 **System**
 ```
-You are a football match director. Given two squads with ratings and recent form,
-produce a realistic pre-match tactical configuration as STRICT JSON.
-Base possession/tempo on the strength gap and styles. Output ONLY the JSON.
+You are a football match director. Given two squads (ratings, form, style) AND the
+league realistic-average BASELINES, produce a realistic pre-match tactical configuration
+as STRICT JSON. ANCHOR every target to the provided baselines, then SKEW by the rating
+gap and styles (stronger side: more possession/shots/attacks; weaker side: fewer, more
+direct/counter). Keep each target inside its [min,max] range. possession_target of the
+two teams must sum to ~1.0. These targets DRIVE the sim (PossessionDirector + decision
+biases) and are the post-match calibration reference. Output ONLY the JSON.
 ```
 
-**User**
+**User**（两队信息 + 真实均值基准一起喂入；基准来自 01 §0.2，可被你预测盘/WC 真实数据替换）
 ```json
 { "home": {"name":"...", "rating":83, "formation":"4-3-3", "key_skills":{"att":81,"mid":84,"def":80},
            "recent_form":"WWDLW", "style_hint":"possession"},
   "away": {"name":"...", "rating":78, "formation":"4-4-2", "key_skills":{"att":77,"mid":76,"def":79},
-           "recent_form":"LWDLL", "style_hint":"counter"} }
+           "recent_form":"LWDLL", "style_hint":"counter"},
+  "baselines": {                                   // ← 01 §0.2 真实均值, 作锚点
+    "possession": {"mean":0.50, "min":0.35, "max":0.65},
+    "shots":      {"mean":13,   "min":8,  "max":18},
+    "shots_on_target_rate": {"mean":0.35, "min":0.33, "max":0.45},
+    "goals_total":{"mean":2.8,  "min":0,  "max":6},
+    "attacks":    {"mean":10,   "min":8,  "max":14},   // 危险进攻/回合(每队)
+    "possession_sequences": {"mean":110, "min":90, "max":140},
+    "pass_completion": {"mean":0.83, "min":0.78, "max":0.88},
+    "save_rate":  {"mean":0.70, "min":0.65, "max":0.75} } }
 ```
 
-**约束输出 schema**（`guided_json`）
+**约束输出 schema**（`guided_json` / Ollama `format`；显式带"每场目标统计"）
 ```json
 {
   "home": {"possession_target":0.62, "tempo":0.55, "directness":0.35,
-           "press_intensity":0.60, "line_height":0.65, "tactical_note":"control through midfield"},
+           "press_intensity":0.60, "line_height":0.65,
+           "shots_target":15, "shots_on_target_rate":0.38, "attacks_target":12,
+           "pass_completion_target":0.85, "tactical_note":"control through midfield"},
   "away": {"possession_target":0.38, "tempo":0.70, "directness":0.65,
-           "press_intensity":0.45, "line_height":0.40, "tactical_note":"sit deep, break fast"},
-  "expected": {"attacks_home":12, "attacks_away":8},   // 仅作软目标参考(见 01 §3.3)
+           "press_intensity":0.45, "line_height":0.40,
+           "shots_target":9, "shots_on_target_rate":0.34, "attacks_target":8,
+           "pass_completion_target":0.80, "tactical_note":"sit deep, break fast"},
+  "expected": {"goals_home":1.6, "goals_away":0.9},   // 软目标(泊松/DC 量级), 供对照不硬执行
   "narrative_seed":"home dominant possession vs away low-block counter"
 }
 ```
-> `possession_target` 之和应 ≈ 1.0。`expected.attacks_*` 仅供 ReportAgent 对照，不硬执行。
+- `possession_target` 两队之和 ≈ 1.0；每个 `*_target` 须落对应 baseline 的 `[min,max]`。
+- **这些 `*_target` 是模拟目标**：`possession_target`→PossessionDirector 反馈(01 §3.2)；`tempo/directness/attacks_target`→回合数引导(01 §3.3)；`shots_target/shots_on_target_rate`→射门倾向偏置；赛后 ReportAgent 拿它们与实际涌现值对照(calibration gate, 05 §3.7)。
+- 强弱差越大 → 强队 possession/shots/attacks 越高、弱队越低越直接（brain 按 rating 差 skew，不超 baseline 区间）。
 
 ---
 
@@ -173,7 +193,7 @@ and time. Favor retention when retention_bias is high. Output ONLY JSON.
 {"action":"throughBall", "target_id":7, "target_zone":"F5", "intent":"play RW in behind", "risk":0.4}
 ```
 - `action ∈ allowed`（编排器按位置/区域裁剪：自家禁区附近加 `clear`，对方禁区内加 `shoot`/`penalty`）。
-- `pass/throughBall/cross` 必带 `target_id`（合法队友）；`shoot` 不带；`dribble` 带 `target_zone`。
+- `pass/throughBall/cross` 的 `target_id`：⚠️ **引擎自己选接球人**（代码核实 `ballMovement.js::ballPassed`/`throughBall` 用 `passScoreOption` 启发式挑队友,函数**无目标参数**）→ **`target_id` 注入不进引擎**。设计:LLM 只定**动作类型**;想偏向某队友 → 编排器把**该队友 `intentPOS` 移到空位**,让引擎评分(`passScoreOption`)选中他(零改引擎,见 06 §1.3)。故 `target_id` 仅作"移谁/解说"用,非硬指定。`shoot` 不带;`dribble` 带 `target_zone`。
 - `risk` 仅供引擎/解说参考；**结果（传成不成、射进不进、扑没扑到）全由引擎按技术概率解算**，Qwen 只决定"做什么"。
 
 ### 4b 第一防守者（防守决策）

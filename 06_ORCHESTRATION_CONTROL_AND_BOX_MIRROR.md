@@ -46,6 +46,8 @@ else {                                                       // 球远 →
 | 不决策的球员 | `player.action='none'` | 回退引擎启发式 |
 
 > **可行性钉死**：注入 = **写 `action` + `intentPOS` 两个引擎已有字段**。`decideMovement`/`getMovement` 原样跑，**零物理改动**。引擎还替我们做动作合法性 + 单球不变式。
+>
+> ⚠️ **传球目标是唯一例外（代码核实 2026-06）**：`player.action='pass/throughBall/cross'` 只**触发**引擎传球函数,**接球人由引擎 `ballMovement.js::passScoreOption` 自己挑**(`ballPassed`/`throughBall` 签名 `(matchDetails,team,player)` 无目标字段)→ "传给谁"**注入不进引擎**。**间接实现且零改引擎**:把目标队友的 `intentPOS` 移到空位 → 引擎评分把球传给他。即 **LLM 定动作类型,引擎定接球人**;要左路出球就让左路队友拉到空位。这是与零改铁律一致的唯一可行路径(若要硬指定接球人,需引擎加 hook,违反铁律,不采用)。
 
 ---
 
@@ -92,7 +94,7 @@ async def tick(md, world_tools, gh, ga, qb, biases):
     if contest_actions:
         a = contest_actions
         find(md, holder_id)["action"] = a["holder"]["action"]    # 持球: pass/shoot/...
-        stash_pass_target(md, holder_id, a["holder"].get("target_id"))
+        nudge_receiver_intent(md, a["holder"].get("target_id"))   # ⚠️ 引擎自选接球人(无目标字段); 改目标队友 intentPOS 偏向之(§1.3)
         if defender_id and a.get("defender"):                    # 第一防守: tackle/jockey/...
             apply_defender_action(md, defender_id, a["defender"]) # tackle→action; jockey→intentPOS贴身
     # 未被决策的球员保持 action='none' → 引擎启发式兜底(含其它防守者自动逼抢)

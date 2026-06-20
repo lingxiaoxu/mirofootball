@@ -6,11 +6,27 @@
 >
 > **复用铁律（贯穿全部 7 份文档）**：**足球引擎 `engine.js` + `lib/*.js` 原封不动 vendored（一行不改），完整运行方式（initiate→iterate→secondHalf + 各 lib 函数）原样保留**。引擎**已原生解算**的一律调用、不重写不简化：射门(`shotMade`)、扑救(`checkGoalScored`，GK 坐标/身高/弹跳/saving)、点球(`penaltyTaken`)、抢断(`calcTackleScore`)、越位/伤病/定位球(`setFreekicks`)、最近球员(`closestPlayerToBall`)。**LLM 只产决策（写 `player.action`/`intentPOS` 两个引擎已有字段），结果一律走引擎原函数**。加时/点球大战/换人/晋级只在编排层加**循环结构**，单次解算仍调引擎。
 >
-> 文档版本：v3（复用铁律审计后）· 决策依据：实读两 repo 代码 + DGX Spark 官方规格 + 两模型官方规格（见文末 Sources）。
+> 文档版本：v4（实跑校准后）· 决策依据：实读两 repo 代码 + DGX Spark 官方规格 + 模型官方规格 + **本机实跑验证（2026-06）**（见文末 Sources）。
 
 ---
 
-## 0. 锁定的最终架构（一页）
+## 0.0 ⚠️ 当前实跑 vs 目标态（先读）
+
+本文 §0/§7 的"锁定架构"是**目标态**；**当前已实跑并验证的栈不同**（brain 可插拔）。架构 / 语义 / 注入接缝设计**全部通用**——只需把"Qwen"读作"brain（当前 nemotron）"、把 vLLM 端口读作 Ollama 端口（对照见 03 §8）。
+
+| 维度 | 当前实跑（已验证 · 03 §2.0 / 05 §3.7） | 目标态（§0/§7） |
+|---|---|---|
+| brain（持球/解说） | **nemotron-3-super:120b**（Ollama, 共享 :11434, 只读不碰；远程经 :11435 token 代理） | Qwen3.6-35B-A3B（vLLM :8001） |
+| 两队 gemma | **gemma4:e2b-it-qat**（Ollama, 独立 daemon :11436/:11437, 两份物理副本, 加载 ~2.5G/个） | Gemma4 E2B + 队 LoRA（vLLM :8002/:8003） |
+| serving | **Ollama**：gemma 用本地 0.30.10 自有实例；nemotron 用系统 0.22.1 | vLLM×3 + NVFP4 |
+| 机数 | 单机（3 模型共存, 实测 used 112G/121G, avail 9G） | 双机数据并行 ×2 |
+| 开机自启 | systemd user service + linger（已配验证） | — |
+
+> 早先按 spec 估的"Gemma ~2-3G/个"**实测有误**：默认/q4 版加载 ~7.8G、QAT 版 ~2.5G；故两队**必须用 QAT** 才能与 nemotron(94G) 共存（详见 05 §3.7）。
+
+---
+
+## 0. 目标架构（一页）—— brain 可插拔；当前实跑见 §0.0 / 03 §2.0
 
 ```
                          ── 一场比赛 = 一台 DGX Spark 完整跑完（绝不跨慢桥接） ──
@@ -42,7 +58,7 @@
 | **Gemma 4 E2B**（+ 客队 LoRA）| 1（客队专用）| 客队 11 人跑位/姿态/无球决策 | 一次 **batch 11** |
 | **Qwen3.6-35B-A3B** | 1 | **持球球员战术决策**（传给谁/射/突/传中）+ 定位球 + 解说 | 事件触发，≤1 次/拍 |
 
-> **两队各一个独立 Gemma 实例**（按你要求，不共享底座）：各 ~3GB，两个 vLLM 实例真并行、各批各的 11 人；总内存 6GB，DGX 毫无压力。
+> **两队各一个独立 Gemma 实例**（不共享底座，各批各的 11 人，真并行）。⚠️ 体积:此处"各 ~3GB"为目标态旧估,**实测**默认/q4 加载 ~7.8G、**QAT ~2.5G**;当前实跑用 **QAT + 两个独立 Ollama daemon**(:11436/:11437)保证真两个实例（同名模型在同 daemon 会被去重）,见 §0.0 / 03 §2.0。
 
 ---
 
@@ -87,7 +103,7 @@
 | 厂商/架构 | Google · MatFormer + Per-Layer Embeddings |
 | 参数 | **2.3B 有效 / 5.1B 总** |
 | 上下文 | 8,192（跑位上下文极短，足够）|
-| 显存 | **~2-3 GB @ Q4** |
+| 显存 | ⚠️ 实测:默认/q4 版**加载 ~7.8 GB**；**QAT 版 ~2.5 GB**（当前实跑用 QAT, 03 §2.0）。早先"~2-3GB"系按 spec 估,以实测为准 |
 | 角色 | 每队 11 人跑位/姿态意图，**批量**、高频、对延迟敏感 |
 
 ---
@@ -136,7 +152,7 @@ mirofootball/
 
 | 保留 ✅ | 丢掉 ❌ |
 |---|---|
-| `camel-ai`（agent 框架）| `camel-oasis`（社交模拟；丢掉后解除 Python<3.12 限制）|
+| **`LLMClient` 直连**（OpenAI 兼容,核心 agent 全走它）| **`camel-ai` + `camel-oasis`**（实读确认:核心 `app/` **不依赖** camel,仅 OASIS 社交脚本用 → 一并丢；丢后解除 Python<3.12）|
 | Neo4j 栈（`storage/neo4j_*`, `graph_builder`, `graph_memory_updater`）| `run_twitter_simulation.py` / `run_reddit_simulation.py` |
 | `report_agent.py` → 比赛解说 | `oasis_profile_generator.py`（社交人格）|
 | `llm_client.py`（OpenAI 格式 → vLLM）| OASIS env（recsys/feed/follower 图）|
@@ -224,7 +240,7 @@ return md, report
 // 输出(~15 token, 限定枚举+合法zone):
 {"id":7,"target_zone":"F5","posture":"run_behind"}
 ```
-引擎拿到后按 `agility/fitness` **夹紧**实际位移 → 即使 Gemma 偶尔激进，物理也跑不出能力范围。门将/后卫的 `options` 不含 `run_behind`（角色限定）。
+引擎按**固定步长（run=1 / sprint=2 单位/轴）+ fitness 递减**移动（**不按 pace 缩放**，代码核实见 01 §0.1）→ Gemma 再激进也只改 `intentPOS` 方向，步速恒定、累了变慢，**跑不出引擎物理范围**。门将/后卫的 `options` 不含 `run_behind`（角色限定）。
 
 ---
 
@@ -265,7 +281,7 @@ return md, report
 
 ---
 
-## 7. 模型服务（vLLM，本机三实例）
+## 7. 模型服务（vLLM，本机三实例）—— ⚠️ 目标态；当前实跑是 Ollama，见 03 §2.0
 
 ```bash
 # Qwen3.6-35B-A3B (战术大脑) — :8001
@@ -301,6 +317,7 @@ Neo4j + Node 引擎 + 编排 + OS  ~18 GB
 ──────────────────────────────────────
 合计                           ~59 GB / 128 GB   ← 富余, 一台还能并跑第 2 场
 ```
+> ⚠️ 这是**目标态(Qwen+2×Gemma4)**预算,且 Gemma 体积按旧估。**当前实跑(nemotron 94G + 2×QAT ~2.5G + 基础设施)实测 used ~112G/121G、avail 9G**,详见 05 §3.7。
 
 ---
 
@@ -312,7 +329,7 @@ Neo4j + Node 引擎 + 编排 + OS  ~18 GB
 |---|---|
 | **🔑 LLM 频率与物理拍解耦**：意图每 ~10-15 拍刷一次，中间引擎免费插值 | **砍 LLM 调用 5-15×（最大头）** |
 | brain 只在真持球决策点触发（多数拍球在飞/无球决策）| brain 量大降 |
-| **(可选，不强制) 热路径关 thinking**：reasoning brain 可关推理链省 token —— **本项目不强制关**（brain = 共享的 nemotron-120b，被 web 其它服务在用，**不为我们重配/重载**；保留 thinking 即可，靠上面解耦 + 短输出已够提速）| 若关则 decode 再降，纯可选 |
+| **🔑 gemma 关 reasoning（已定）/ brain 开**：gemma 高频量层 → `think=False`，0.7s/次（开则 3–7.5s → 单场变几小时）；brain 低频战略层 → `think=True`，思考提质 | **gemma 关是单场提速关键之一**；brain 开不拖速（低频，1–2/拍触发）|
 | 短约束输出（Gemma ~15t / Qwen ~30-50t）+ JSON-schema 解码 | decode 正比输出长度 → 越短越快 |
 | `--enable-prefix-caching`（共享规则/静态前缀）| 不重算长 prompt |
 | 两队 Gemma `asyncio.gather` 并发 + vLLM 连续批处理 | 真并行, 批量摊薄 |
@@ -351,7 +368,7 @@ Neo4j + Node 引擎 + 编排 + OS  ~18 GB
 1. DGX OS + CUDA，确认 `sm_121` + NVFP4 工具链。
 
 **Phase 1 — 推理服务（半天）★当前 Ollama 三模型**
-2. brain = 已驻共享 `nemotron-3-super:120b`@:11434（**只读发请求、绝不碰**，临时替代 Qwen）；起 mirofootball **自有 Ollama 实例 :11435**，造 **两个独立 gemma 模型名 `gemma-home`/`gemma-away`**（FROM `gemma4:e2b`，03 §2.0）。
+2. brain = 已驻共享 `nemotron-3-super:120b`@:11434（**只读发请求、绝不碰**，临时替代 Qwen）；起 mirofootball **两个独立 Ollama daemon :11436/:11437**（本地 0.30.10），各下一份 **`gemma4:e2b-it-qat`**（两份物理副本；QAT 才装得下,03 §2.0）。（注:`:11435` 已被 nemotron 的 token 认证代理占用,避开。）
 3. `curl /api/ps` 双端口验收**三模型同时在跑**（1 nemotron + 2 gemma），brain 只读 ping；实测 tok/s。（目标态可换 vLLM 三实例，§7。）
 
 **Phase 2 — 建 mirofootball 骨架 + 引擎服务化（1 天）**

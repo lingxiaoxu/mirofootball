@@ -112,9 +112,18 @@ kg.swap_agent(out_id, in_player)                    # agent_graph 更新
 |---|---|---|
 | 编排工具函数 `build_world/offball/on_ball/inject_*/ball_state_changed` | 骨架已述，待实现 | Phase 4 |
 | `data_map.py` / `style_extract.py`（FC26→引擎、WC统计→风格）| 骨架已给，待补全 | 收到数据后 |
-| **整场模拟 vs 真实**校准（比分/统计分布合理性）| 原则已述（calibration gate 思路），待落指标 | Phase 7 |
+| **整场模拟 vs 真实**校准（比分/统计分布合理性）| ✅ 指标已落（见下方"校准指标"）| Phase 7 |
 | 可视化（看一场带推理的模拟）| 可选，复用引擎示例 GUI / MiroFish 前端 | 后续 |
-| 定位球（角球/任意球）决策接 LLM | 引擎有 setFreekicks，决策可后接 Qwen | Phase 5 |
+| 定位球（角球/任意球）决策接 LLM | 引擎有 setFreekicks，决策可后接 brain | Phase 5 |
+| **传球目标不可注入**（引擎自选接球人）| ✅ 已查证 + 给间接方案（移目标队友 intentPOS）| 02 §4a / 06 §1.3 |
+| brain prompt 适配 reasoning 模型（nemotron 带 thinking）| ✅ LLMClient 剥 `<think>`；已注明 | 01/02 顶注 |
+
+**校准指标（Phase 7 · calibration gate，对照真实分布）：**
+- **控球率**：每队常态 45–65%；与设定目标 ±5%。
+- **射门**：8–18/队·场，射正率 ~33%。**进球**：场均总进球 ~2.5–3.0（泊松/DC 参照）。
+- **xG ↔ 实际进球**：偏差在样本噪声内。**攻防回合**（possession sequences）：8–14/队。
+- **扑救率** ~65–75%（调 `checkGoalScored` 参数,01 §4.4）；**传球成功率** 75–88%；**越位** 1–4/队；红黄牌落真实区间。
+- **门槛**：带 LoRA/prompt 跑 N 场,上述指标全落区间且**不劣于纯底座**,否则回退（像预测盘 calibration gate）。
 
 ---
 
@@ -125,9 +134,11 @@ kg.swap_agent(out_id, in_player)                    # agent_graph 更新
 **本地模型现状（替代计划原 vLLM+Qwen 设想）：**
 - 机器 = **DGX Spark GB10**，aarch64，**128GB 统一内存**（`free` 看占用，非 `nvidia-smi`）。
 - **serving = Ollama**；**brain 与 gemma 分两个 server**（见下隔离约束）。
-- **brain = `nemotron-3-super:120b`**（nemotron_h_moe, 123.6B, Q4_K_M, ~94GB, 已驻共享 server `:11434`）**临时替代 Qwen3.6-35B-A3B**；两队 = **`gemma4:e2b`**（2026-04 发布，PLE 有效 2.3B，q4 下 <1.5GB/份，thinking 可配但**本项目保持开、不强制关**）。
-- ⚠️ **隔离铁律延伸（共享 brain 绝不碰）**：nemotron-120b **被 web 上其它服务在用** → mirofootball **只把它当只读外部推理端点**：仅发 chat 请求，**绝不 reload/evict/重启其 server、绝不覆盖 `num_ctx`**（改 ctx 会触发整模型重载 = 打断共享方）。**两队 gemma 跑在 mirofootball 自己的独立 Ollama 实例 `:11435`**（设其自身 `OLLAMA_MAX_LOADED_MODELS≥2`）→ 加载/驱逐只发生在我们这台实例内，**共享 brain 永远不受影响**。两实例共享 128GB 内存池但互不重载。
-- **内存账（实测）**：94(brain)+2×Gemma(~5G)+infra(~1G) ≈ **100GB / 127.5GB**（不开 KG）；开 KG+embed ≈ 103GB。**两个 Gemma 装得下，不用打断 brain**。真约束是 120b decode 速度，非内存。
+- **brain = `nemotron-3-super:120b`**（nemotron_h_moe, 123.6B, Q4_K_M, ~94GB, 已驻共享 server `:11434`）**临时替代 Qwen3.6-35B-A3B**。
+- **两队 gemma = `gemma4:e2b-it-qat`**（QAT 版,磁盘 4.3G、**加载 ~2.5G/份**;thinking 保持开、不强制关）。⚠️ **必须用 QAT 不能用默认版**：实测默认 `gemma4:e2b`/`e2b-it-q4_K_M` 磁盘 7.2G、**加载 ~7.8G/份**,两个 + nemotron 超 121G 装不下;QAT 才装得下。（早先文档"q4 <1.5GB/份"系按 spec 估算,实测有误,以此为准。）
+- ⚠️ **隔离铁律延伸（共享 brain 绝不碰）**：nemotron 被 web 其它服务在用（**`:11435` = `.nemoclaw` 的 token 认证代理 → 转发 :11434**,也不能碰）→ mirofootball **只把 brain 当只读外部推理端点**：仅发 chat 请求,**绝不 reload/evict/重启/改 num_ctx**。**两队 gemma 用自有的两个独立 daemon `:11436`(home)/`:11437`(away) + 两个独立 `OLLAMA_MODELS` 目录(两份物理副本)**——加载/驱逐只在我们 daemon 内,共享 brain 永不受影响。
+- **QAT 需新版 Ollama**：系统 0.22.1 拉 QAT 报 412 → 本地装 **0.30.10** 仅给 gemma daemon 用,nemotron 的 systemd 0.22.1 不动。
+- ✅ **2026-06-20 已实跑验证**：3 模型同跑（nemotron + 两 gemma 各 ~2.5G,各答各的互不串),**实测 used 112G/121G, avail 9G**,brain 全程健康。已配 **systemd user service + linger** 开机自启（`ollama-gemma-home/away.service`）。详见 03 §2.0。
 
 **6 点解决落点：**
 
@@ -138,7 +149,7 @@ kg.swap_agent(out_id, in_player)                    # agent_graph 更新
 | 3 | `Math.random()` 不可种子化 | **接受**（只比统计分布，KS 检验）；可选 `server.js` 顶部 `Math.random=seededPRNG` shim（外壳不碰引擎） | **06 §3.4** |
 | 4 | 每拍 `console.log`（核实**两处**：`engine.js:89` + `lib/ballMovement.js:692`） | 进程层 `>/dev/null` 或 server.js `console.log=()=>{}`（外壳）；编排器读返回值不依赖 stdout | **03 §3** |
 | 5 | embedding（`nomic-embed-text`）是第三个 Ollama 模型 | **多半不用**：仅 KG 文档摄入/语义检索/report 相关性用；比赛 KG 是结构化节点→Cypher 直查，不需 embedding。MVP 不开 KG；**需要时再加**（~0.5G，按需载，计入 `MAX_LOADED_MODELS`） | 03、本节 |
-| 6 | 120b 速度（brain 瓶颈） | **接受**；编排层杠杆（LLM/物理拍解耦 + 短 JSON + trivial 走引擎 + prefix 缓存）已够，**不换模型、不碰共享 brain**；**热路径关 thinking 改为可选、不强制**（brain 共享不重配，保持 thinking 开）；大批量才考虑换小激活 brain | **00 §9.1** |
+| 6 | 120b 速度（brain 瓶颈） | **接受**；编排层杠杆（LLM/物理拍解耦 + 短 JSON + trivial 走引擎 + prefix 缓存）已够，**不换模型、不碰共享 brain**；**reasoning 已定:brain 开(`think=True`,低频战略)、gemma 关(`think=False`,高频量层,开则单场变几小时)**；大批量才考虑换小激活 brain | **00 §9.1 / 03 §4** |
 
 **MiroFish 复用边界（核实）**：可复用 `LLMClient`（每实例独立 base_url+model→同端点按名开 3 实例，走直连**不用 camel 全局 env**）、`SimulationConfigGenerator`（生成 match config）、`ReportAgent`（文本式 ReACT，模型无关）、`SimulationRunner`。`camel`/`oasis` 仅 `scripts/` 依赖，`app/` 零依赖 → 整块剥离。OASIS 的 `env.step({agent:action})` 批量同步模式照搬，但 env/agent_graph 不复用，自写 tick 循环调引擎。
 
