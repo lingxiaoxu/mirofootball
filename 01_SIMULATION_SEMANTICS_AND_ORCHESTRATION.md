@@ -55,6 +55,27 @@
 
 → **真实均值当目标 → 战术参数 + 反馈驱动 → 涌现统计 → 对照校验**,而非硬写死(足球是涌现的,硬写就不是模拟)。
 
+### 0.4 轨迹连续性 + 可回溯记录（重要需求）
+
+> **要求**:球 + 每个球员的移动必须**连续、可追踪、可回溯、逐拍记录**,便于以后 track / review / replay;尽量符合物理轨迹。
+
+**引擎天然满足(代码核实)**:
+- **球员移动步进有界、无瞬移**:`getRunMovement` ±1/轴、`getSprintMovement` ±2/轴,`completeMovement` 夹在球场内 → 每拍位移很小、**逐拍连续**(不会跳变);`currentPOS` 每拍可读 → 天然可追踪。
+- **球飞行是物理弧线**:`ball.position` 带 z 高度;`ball.ballOverIterations` 存飞行轨迹点(`common.getBallTrajectory` + `calculatePower` 算抛物线式飞行)→ 球在空中是**连续物理弧线**,落点/高度可回溯。
+- 物理性边界:球弧线引擎原生(物理);球员为**步进连续**(非牛顿动量/加速度,见 §0.1 已知抽象)——满足"连续可追踪",但不是完整动力学。
+
+**记录设计(orchestrator 每拍写,零改引擎)**:每拍把一条轨迹记录追加到 `data/<match_id>/trajectory.jsonl`(**一拍一行,全量 22 人 + 球**):
+```json
+{"iter":1234, "min":58.2,
+ "ball":{"pos":[x,y,z], "holder":11, "team":"home", "in_flight":false, "flight":[[x,y,z],...]},
+ "players":[{"id":7,"team":"home","pos":[x,y],"action":"run","hasBall":false}, /* …全 22 人… */],
+ "events":["ball passed by ...","Slide tackle ..."]}
+```
+- **可完整回放**:任一球员的整条路径、任一时刻的全场态势都能逐拍重建 → track / review / 可视化 / 调试。
+- **与 KG 分工**:`trajectory.jsonl` = **每拍全量连续轨迹**(回放用);Neo4j `State`/`DID` 节点(00 §6)= **关键拍的语义快照 + 决策**,用 `iter` 指针引用 jsonl 对应行(解说/可解释)。
+- **成本**:一场 ~4000 拍 × 22 坐标 ≈ 数 MB jsonl/场,廉价。**连续性建议每拍写**(要更省可每 N 拍,但会损连续性,默认每拍)。
+- **确定性回放**:配合 06 §3.4 可选 seed,可逐字节复现整条轨迹。
+
 ---
 
 ## 1. 顶层编排 = MiroFish 的 `SimulationManager`，驱动本地模型（代码确认）

@@ -366,6 +366,7 @@ async def simulate_match(team1, team2, pitch):
                 inject_ball_action(md, await qb.decide(holder, world, biases[holder["team"]]))
 
             md = await engine_call(http, "iterate", {"matchDetails": md})  # 物理+单球不变式
+            traj.append_tick(md, it)        # ★每拍全量轨迹→ data/<match>/trajectory.jsonl(连续可回溯, 01 §0.4)
             kg.update(md, it); poss.observe(md)
 
         report = await director.report(md, kg.stats())             # ReportAgent(02 §5)

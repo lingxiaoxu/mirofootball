@@ -278,6 +278,7 @@ return md, report
 - **动态部分**（Match/State/DID）：每场**本地建、本地写**，绝不跨机。
 - 决策时 Gemma/Qwen 的上下文 = 本地 Neo4j 检索（该球员属性 + 队友空位 + 对位 + 当前态势）。
 - **`PASSES_TO` 权重用你现成数据接地**——把你的量化优势注入 agentic 模拟。
+- **轨迹分工(见 01 §0.4)**:**每拍全量连续轨迹**(球 + 22 人坐标/动作)写 `data/<match_id>/trajectory.jsonl`(回放/track/review 用);KG `State`/`DID` 只存**关键拍语义快照 + 决策**,用 `iter` 指针引用 jsonl 行。轨迹连续、可回溯是硬需求。
 
 ---
 
