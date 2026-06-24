@@ -1,17 +1,31 @@
-# OS / editor
-.DS_Store
-Thumbs.db
-*.swp
-*~
-.idea/
-.vscode/
-
-# env / secrets (never commit)
-.env
-*.env
-.env.*
-
-# python / node (in case impl lands here later)
+# venv / 运行产物
+.venv/
+data/
+*.log
 __pycache__/
 *.pyc
-node_modules/
+
+# 模型库 / 大件（各自从 Ollama 拉，不入库）
+serving/ollama_models/
+serving/ollama_home/
+serving/ollama_away/
+serving/ollama-new/
+
+# node 依赖
+**/node_modules/
+
+# 下载的上游源（已 vendored 进 engine/）
+footballSimulationEngine-test-master/
+MiroFish-Offline-Test-main/
+
+# plans 是独立的 public 仓库（agentic-simulation 有自己的 .git）
+agentic-simulation/
+
+# API key（绝不入库）
+.env
+
+# 模型 artifacts / 部署标记(训练/Ollama 生成, 不入库)
+serving/lora/*.gguf
+serving/lora/.mf_*
+# 临时测试脚本(scratch)
+run_*x*.sh

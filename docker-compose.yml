@@ -1,0 +1,41 @@
+# MiroFootball 容器编排(plan 03§7)。目标态/可移植部署。
+# 注: Box A 当前实际为 host-mode(systemd ollama + node 引擎 + 本机 brain), 因 Box A 显存/内存
+# 经不起折腾, 不在 Box A 跑容器。本文件用于在【干净的镜像机】上一键起 neo4j + 引擎 + 编排。
+# 模型(nemotron/gemma)仍走外部 Ollama 端点(BRAIN_URL/GEMMA_*_URL), 不容器化(显存独占)。
+version: "3.8"
+services:
+  neo4j:
+    image: neo4j:5-community            # arm64 多架构镜像
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-changeme}
+      - NEO4J_server_memory_heap_max__size=1G
+    ports: ["7474:7474", "7687:7687"]
+    volumes: ["neo4j_data:/data"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7474"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  engine:
+    build: { context: ./engine, dockerfile: Dockerfile }
+    ports: ["7000:7000"]
+    restart: unless-stopped
+
+  orchestrator:
+    build: { context: ., dockerfile: Dockerfile.brain }
+    depends_on:
+      neo4j: { condition: service_healthy }
+      engine: { condition: service_started }
+    environment:
+      - ENGINE_URL=http://engine:7000
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-changeme}
+      - BRAIN_URL=${BRAIN_URL:-http://host.docker.internal:11434}
+      - GEMMA_HOME_URL=${GEMMA_HOME_URL:-http://host.docker.internal:11436}
+      - GEMMA_AWAY_URL=${GEMMA_AWAY_URL:-http://host.docker.internal:11437}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes: ["./data:/app/data", "./serving/lora:/app/serving/lora:ro"]
+
+volumes:
+  neo4j_data:

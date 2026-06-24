@@ -1,0 +1,9 @@
+# 编排器(brain/)容器(plan 03§7)。arm64。模型走外部 Ollama 端点, 容器内只跑编排逻辑。
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt* ./
+RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || \
+    pip install --no-cache-dir httpx neo4j 2>/dev/null || true
+COPY brain/ ./brain/
+COPY run_real_match.py run_calibration.py run_knockout.py ./
+CMD ["python", "run_real_match.py", "Spain", "Germany", "lora", "600"]

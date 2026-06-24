@@ -1,0 +1,792 @@
+const common = require(`../lib/common`)
+const setPositions = require(`../lib/setPositions`)
+const actions = require(`../lib/actions`)
+
+function moveBall(matchDetails) {
+  const { ball } = matchDetails
+  if (!ball.ballOverIterations || ball.ballOverIterations.length === 0) {
+    ball.direction = 'wait'
+    if (ball.position.length === 2) ball.position = [ball.position[0], ball.position[1], 0]
+    return matchDetails
+  }
+  const currentPos = ball.position
+  const nextPoint = ball.ballOverIterations[0]
+  getBallDirection(matchDetails, nextPoint)
+  const player = setBPlayer(nextPoint)
+  const endPos = resolveBallMovement(player, matchDetails)
+
+  if (matchDetails.endIteration === true) return matchDetails
+  // ball.ballOverIterations.shift()
+
+  const safeEndPos = [Number(endPos[0] || currentPos[0]), Number(endPos[1] || currentPos[1]), Number(endPos[2] || 0)]
+  ball.position = safeEndPos
+  matchDetails.iterationLog.push(`ball still moving from previous kick: ${safeEndPos}`)
+  // checkGoalScored(matchDetails)
+  let lastTeam = matchDetails.ball.lastTouch.teamID
+  matchDetails = setPositions.keepInBoundaries(matchDetails, lastTeam.name, safeEndPos)
+  return matchDetails
+}
+
+function setBPlayer(ballPos) {
+  return {
+    'name': `Ball`,
+    'position': `LB`,
+    'rating': `100`,
+    'skill': {
+      'passing': `100`,
+      'shooting': `100`,
+      'saving': `100`,
+      'tackling': `100`,
+      'agility': `100`,
+      'strength': `100`,
+      'penalty_taking': `100`,
+      'perception': `100`,
+      'jumping': `100`,
+      'control': `100`
+    },
+    'fitness': `100`,
+    'height': `160`,
+    'originPOS': ballPos,
+    'currentPOS': ballPos,
+    'injured': false
+  }
+}
+
+function ballKicked(matchDetails, team, player) {
+  let { position, direction } = matchDetails.ball
+  const [, pitchHeight] = matchDetails.pitchSize
+  matchDetails.iterationLog.push(`ball kicked by: ${player.name}`)
+  matchDetails.ball.lastTouch.playerName = player.name
+  matchDetails.ball.lastTouch.playerID = player.playerID
+  matchDetails.ball.lastTouch.teamID = team.teamID
+  matchDetails.ball.lastTouch.iterations = 0
+  let newPos = [0, 0]
+  let teamShootingToTop = [`wait`, `north`, `north`, `north`, `north`, `east`, `east`, `west`, `west`]
+  let teamShootingToTop2 = [`northeast`, `northeast`, `northeast`, `northwest`, `northwest`, `northwest`]
+  let topTeamDirection = teamShootingToTop.concat(teamShootingToTop2)
+  let teamShootingToBottom = [`wait`, `south`, `south`, `south`, `south`, `east`, `east`, `west`, `west`]
+  let teamShootingToBottom2 = [`southeast`, `southeast`, `southeast`, `southwest`, `southwest`, `southwest`]
+  let bottomTeamDirection = teamShootingToBottom.concat(teamShootingToBottom2)
+  let power = common.calculatePower(player.skill.strength, pitchHeight)
+  const calcHeight = parseInt(player.height, 10) + parseInt((player.skill.jumping || 0), 10)
+  const bodyPart = setAttackBodyPart(position, calcHeight)
+  matchDetails.ball.lastTouch.bodyPart = bodyPart
+  const isHeader = bodyPart === 'head'
+  const isVolley = ['stomach', 'back', 'chest', 'shoulder'].includes(bodyPart)
+  if (isHeader) {
+    matchDetails.iterationLog.push(`Header made by: ${player.name}`)
+    power *= 0.7
+  } else if (isVolley) {
+    matchDetails.iterationLog.push(`Volley kick made by: ${player.name}`)
+    power *= 0.9
+  }
+  if (player.originPOS[1] > (pitchHeight / 2)) {
+    direction = topTeamDirection[common.getRandomNumber(0, topTeamDirection.length - 1)]
+    newPos = getTopKickedPosition(direction, position, power)
+  } else {
+    direction = bottomTeamDirection[common.getRandomNumber(0, bottomTeamDirection.length - 1)]
+    newPos = getBottomKickedPosition(direction, position, power)
+  }
+  return calcBallMovementOverTime(matchDetails, power, newPos, player, 'kick')
+}
+
+function getTopKickedPosition(direction, position, power) {
+  if (direction === `wait`) return newKickedPosition(position, 0, (power / 2), 0, (power / 2))
+  else if (direction === `north`) return newKickedPosition(position, -20, 20, -power, -(power / 2))
+  else if (direction === `east`) return newKickedPosition(position, (power / 2), power, -20, 20)
+  else if (direction === `west`) return newKickedPosition(position, -power, -(power / 2), -20, 20)
+  else if (direction === `northeast`) return newKickedPosition(position, 0, (power / 2), -power, -(power / 2))
+  else if (direction === `northwest`) return newKickedPosition(position, -(power / 2), 0, -power, -(power / 2))
+}
+
+function getBottomKickedPosition(direction, position, power) {
+  if (direction === `wait`) return newKickedPosition(position, 0, (power / 2), 0, (power / 2))
+  else if (direction === `south`) return newKickedPosition(position, -20, 20, (power / 2), power)
+  else if (direction === `east`) return newKickedPosition(position, (power / 2), power, -20, 20)
+  else if (direction === `west`) return newKickedPosition(position, -power, -(power / 2), -20, 20)
+  else if (direction === `southeast`) return newKickedPosition(position, 0, (power / 2), (power / 2), power)
+  else if (direction === `southwest`) return newKickedPosition(position, -(power / 2), 0, (power / 2), power)
+}
+
+function newKickedPosition(pos, lowX, highX, lowY, highY) {
+  let newPosition = [0, 0]
+  newPosition[0] = pos[0] + common.getRandomNumber(lowX, highX)
+  newPosition[1] = pos[1] + common.getRandomNumber(lowY, highY)
+  return newPosition
+}
+
+function shotMade(matchDetails, team, player) {
+  const [pitchWidth, pitchHeight] = matchDetails.pitchSize
+  matchDetails.iterationLog.push(`Shot Made by: ${player.name}`)
+  matchDetails.ball.lastTouch.playerName = player.name
+  matchDetails.ball.lastTouch.playerID = player.playerID
+  matchDetails.ball.lastTouch.teamID = team.teamID
+  matchDetails.ball.lastTouch.iterations = 0
+  let shotPosition = [0, 0]
+  let shotPower = common.calculatePower(player.skill.strength, pitchHeight)
+  let PlyPos = player.currentPOS
+  let thisTeamStats
+  if (common.isEven(matchDetails.half)) thisTeamStats = matchDetails.kickOffTeamStatistics
+  else if (common.isOdd(matchDetails.half)) thisTeamStats = matchDetails.secondTeamStatistics
+  else throw new Error(`You cannot supply 0 as a half`)
+  thisTeamStats.shots.total++
+  player.stats.shots.total++
+  const calcHeight = parseInt(player.height, 10) + parseInt((player.skill.jumping || 0), 10)
+  const bodyPart = setAttackBodyPart(matchDetails.ball.position, calcHeight)
+  matchDetails.ball.lastTouch.bodyPart = bodyPart
+  const isHeader = bodyPart === 'head'
+  const isVolley = ['stomach', 'back', 'chest', 'shoulder'].includes(bodyPart)
+  if (isHeader) {
+    matchDetails.iterationLog.push(`Header Shot by: ${player.name}`)
+    shotPower *= 0.7
+  } else if (isVolley) {
+    matchDetails.iterationLog.push(`Volley Shot by: ${player.name}`)
+    shotPower *= 0.9
+  }
+  let shotReachGoal
+  if (player.originPOS[1] > pitchHeight / 2) {
+    shotReachGoal = !(((PlyPos[1] - shotPower) > 0))
+  } else {
+    shotReachGoal = !(((PlyPos[1] + shotPower) < pitchHeight))
+  }
+  // mirofootball 校准: 射正吃 shooting/finishing 评分(roll 0→100, 技能成比例; 好射手多射正)。
+  let shootingRoll = common.getRandomNumber(0, 50)
+  if (isVolley) shootingRoll += 6
+  if (isHeader) shootingRoll += 4
+  if (shotReachGoal && player.skill.shooting > shootingRoll) {
+    thisTeamStats.shots.on++
+    player.stats.shots.on++
+    // 瞄准球门内(门柱 ±45 内取 ±40, 确保射正的球真能进/被扑, 而非打偏)
+    shotPosition[0] = common.getRandomNumber((pitchWidth / 2) - 40, (pitchWidth / 2) + 40)
+    matchDetails.iterationLog.push(`Shot On Target at X Position ${shotPosition[0]}`)
+    if (player.originPOS[1] > pitchHeight / 2) shotPosition[1] = -1
+    else shotPosition[1] = pitchHeight + 1
+  } else {
+    thisTeamStats.shots.off++
+    player.stats.shots.off++
+    let left = (common.getRandomNumber(0, 10) > 5)
+    let leftPos = common.getRandomNumber(0, (pitchWidth / 2) - 55)
+    let rightPOS = common.getRandomNumber((pitchWidth / 2) + 55, pitchWidth)
+    shotPosition[0] = (left) ? leftPos : rightPOS
+    matchDetails.iterationLog.push(`Shot Off Target at X Position ${shotPosition[0]}`)
+    if (player.originPOS[1] > pitchHeight / 2) shotPosition[1] = PlyPos[1] - shotPower
+    else shotPosition[1] = PlyPos[1] + shotPower
+  }
+  let endPos = calcBallMovementOverTime(matchDetails, shotPower, shotPosition, player, 'shot')
+  if (matchDetails.endIteration == true) return endPos
+  checkGoalScored(matchDetails)
+  return endPos
+}
+
+function penaltyTaken(matchDetails, team, player) {
+  const [pitchWidth, pitchHeight] = matchDetails.pitchSize
+  player.action = `none`
+  matchDetails.iterationLog.push(`Penalty Taken by: ${player.name}`)
+  matchDetails.ball.lastTouch.playerName = player.name
+  matchDetails.ball.lastTouch.playerID = player.playerID
+  matchDetails.ball.lastTouch.teamID = team.teamID
+  matchDetails.ball.lastTouch.iterations = 0
+  const calcHeight = parseInt(player.height, 10) + parseInt((player.skill.jumping || 0), 10)
+  const bodyPart = setAttackBodyPart(matchDetails.ball.position, calcHeight)
+  matchDetails.ball.lastTouch.bodyPart = bodyPart
+  let shotPosition = [0, 0]
+  let shotPower = common.calculatePower(player.skill.strength, pitchHeight)
+  let PlyPos = player.currentPOS
+  let thisTeamStats
+  if (common.isEven(matchDetails.half)) thisTeamStats = matchDetails.kickOffTeamStatistics
+  else if (common.isOdd(matchDetails.half)) thisTeamStats = matchDetails.secondTeamStatistics
+  else throw new Error(`You cannot supply 0 as a half`)
+  thisTeamStats.shots.total++
+  player.stats.shots.total++
+  if (player.skill.penalty_taking > common.getRandomNumber(0, 100)) {
+    thisTeamStats.shots.on++
+    player.stats.shots.on++
+    shotPosition[0] = common.getRandomNumber((pitchWidth / 2) - 50, (pitchWidth / 2) + 50)
+    matchDetails.iterationLog.push(`Shot On Target at X Position ${shotPosition[0]}`)
+  } else {
+    thisTeamStats.shots.off++
+    player.stats.shots.off++
+    let left = (common.getRandomNumber(0, 10) > 5)
+    let leftPos = common.getRandomNumber(0, (pitchWidth / 2) - 55)
+    let rightPOS = common.getRandomNumber((pitchWidth / 2) + 55, pitchWidth)
+    shotPosition[0] = (left) ? leftPos : rightPOS
+    matchDetails.iterationLog.push(`Shot Off Target at X Position ${shotPosition[0]}`)
+  }
+  if (player.originPOS[1] > pitchHeight / 2) shotPosition[1] = PlyPos[1] - shotPower
+  else shotPosition[1] = PlyPos[1] + shotPower
+  let endPos = calcBallMovementOverTime(matchDetails, player.skill.strength, shotPosition, player, 'shot')
+  if (matchDetails.endIteration == true) return endPos
+  checkGoalScored(matchDetails)
+  return endPos
+}
+
+function checkGoalScored(matchDetails) {
+  let {
+    ball, half, kickOffTeam, secondTeam
+  } = matchDetails
+  const [pitchWidth, pitchHeight, goalWidth] = matchDetails.pitchSize
+  const ballZ = ball.position[2] || 0
+  const centreGoal = pitchWidth / 2
+  const goalEdge = goalWidth / 2
+  const goalX = common.isBetween(ball.position[0], centreGoal - goalEdge, centreGoal + goalEdge)
+  let KOGoalie = kickOffTeam.players[0]
+  let STGoalie = secondTeam.players[0]
+  let ballProx = 40   // mirofootball 校准: 原 8 太小(GK 几乎扑不到→射正全进, save%≈0)。
+                      // 扩到 40(~半球门宽)让 GK 能扑中路射门; 配合 skill.saving 概率 → save% 落 65-75%。
+  let [ballX, ballY] = ball.position
+  let nearKOGoalieX = common.isBetween(ballX, KOGoalie.currentPOS[0] - ballProx, KOGoalie.currentPOS[0] + ballProx)
+  let nearKOGoalieY = common.isBetween(ballY, KOGoalie.currentPOS[1] - ballProx, KOGoalie.currentPOS[1] + ballProx)
+  let nearSTGoalieX = common.isBetween(ballX, STGoalie.currentPOS[0] - ballProx, STGoalie.currentPOS[0] + ballProx)
+  let nearSTGoalieY = common.isBetween(ballY, STGoalie.currentPOS[1] - ballProx, STGoalie.currentPOS[1] + ballProx)
+  let KOrHeight = KOGoalie.height + KOGoalie.skill.jumping
+  let STrHeight = STGoalie.height + STGoalie.skill.jumping
+  let KTGSaving = KOGoalie.skill.saving
+  let STGSaving = STGoalie.skill.saving
+  if (nearKOGoalieX && nearKOGoalieY && ballZ < KOrHeight && KTGSaving > common.getRandomNumber(0, 100)) {
+    matchDetails = setPositions.setGoalieHasBall(matchDetails, KOGoalie)
+    if (common.inTopPenalty(matchDetails, ball.position) || common.inBottomPenalty(matchDetails, ball.position)) {
+      matchDetails.iterationLog.push(`ball saved by ${KOGoalie.name} possesion to ${kickOffTeam.name}`)
+      KOGoalie.stats.saves++
+    }
+    matchDetails.endIteration = true
+  } else if (nearSTGoalieX && nearSTGoalieY && ballZ < STrHeight && STGSaving > common.getRandomNumber(0, 100)) {
+    matchDetails = setPositions.setGoalieHasBall(matchDetails, STGoalie)
+    if (common.inTopPenalty(matchDetails, ball.position) || common.inBottomPenalty(matchDetails, ball.position)) {
+      matchDetails.iterationLog.push(`ball saved by ${STGoalie.name} possesion to ${secondTeam.name}`)
+      STGoalie.stats.saves++
+    }
+    matchDetails.endIteration = true
+  } else if (goalX) {
+    if (ball.position[1] < 1) {
+      if (half == 0) throw new Error('cannot set half as 0')
+      else if (common.isOdd(half)) matchDetails = setPositions.setSecondTeamGoalScored(matchDetails)
+      else matchDetails = setPositions.setKickOffTeamGoalScored(matchDetails)
+    } else if (ball.position[1] >= pitchHeight) {
+      if (half == 0) throw new Error('cannot set half as 0')
+      else if (common.isOdd(half)) matchDetails = setPositions.setKickOffTeamGoalScored(matchDetails)
+      else matchDetails = setPositions.setSecondTeamGoalScored(matchDetails)
+    }
+  }
+}
+
+function throughBall(matchDetails, team, player) {
+  const { pitchSize } = matchDetails
+  const pitchHeight = pitchSize[1]
+  const ballPos = matchDetails.ball.position
+  matchDetails.ball.lastTouch.playerName = player.name
+  matchDetails.ball.lastTouch.playerID = player.playerID
+  matchDetails.ball.lastTouch.teamID = team.teamID
+  matchDetails.ball.lastTouch.iterations = 0
+  matchDetails.iterationLog.push(`through ball attempted by: ${player.name}`)
+  player.stats.passes.total++
+  matchDetails.ball.passInProgress = true   // mirofootball: 标记传球进行中, 接球时判 on/off
+  const power = common.calculatePower(player.skill.strength, pitchHeight)
+  const maxDist = power
+  const aTop = player.originPOS[1] > (pitchHeight / 2)
+  let teammates = getPlayersInDistance(team, player, pitchSize)
+  if (!teammates || teammates.length === 0) return matchDetails
+  let candidates = teammates.filter(p => {
+    const forward = aTop ? ballPos[1] - p.position[1] : p.position[1] - ballPos[1]
+    if (forward <= 0) return false // must be ahead
+    const d = common.distance(ballPos, p.position)
+    return d <= maxDist
+  })
+  const positionY = matchDetails.ball.position[1]
+  let attackingThird = aTop ? positionY < pitchHeight * 0.33 : positionY > pitchHeight * 0.66
+  if (candidates.length === 0) {
+    if (attackingThird && common.getRandomNumber(0, 100) < 50) return ballKicked(matchDetails, team, player)
+    return ballPassed(matchDetails, team, player)
+  }
+  candidates.sort((a, b) => tballScoreOption(b, aTop, ballPos, maxDist) - tballScoreOption(a, aTop, ballPos, maxDist))
+  const targetPlayer = candidates[0]
+  matchDetails.iterationLog.push(`through ball target: ${targetPlayer.name}`)
+  const leadDistance = Math.min(maxDist * 0.4, common.distance(ballPos, targetPlayer.position) * 0.5)
+  const leadY = aTop ? -leadDistance : leadDistance
+  let finalTarget = [targetPlayer.position[0], targetPlayer.position[1] + leadY]
+  const accuracyFactor = (100 - player.skill.passing) / 100
+  const spread = maxDist * 0.20 * accuracyFactor
+  finalTarget = [
+    common.round(finalTarget[0] + common.getRandomNumber(-spread, spread), 0),
+    common.round(finalTarget[1] + common.getRandomNumber(-spread, spread), 0)
+  ]
+  matchDetails.ball.lastTouch.bodyPart = setAttackBodyPart([0, 0, 0], 100)
+  return calcBallMovementOverTime(matchDetails, power, finalTarget, player, 'through')
+}
+
+function tballScoreOption(p, attackingTop, ballPos, maxDistance) {
+  let score = 0
+  const d = common.distance(ballPos, p.position)
+  const forward = attackingTop ? ballPos[1] - p.position[1] : p.position[1] - ballPos[1]
+  score += forward * 2
+  if (!p.isMarked) score += 40
+  score -= Math.abs(d - (0.6 * maxDistance))
+  return score
+}
+
+
+function getPlayersInDistance(team, player, pitchSize) {
+  const [pitchWidth, pitchHeight] = pitchSize
+  let playersInDistance = []
+  for (const teamPlayer of team.players) {
+    if (teamPlayer.name != player.name) {
+      let onPitchX = common.isBetween(teamPlayer.currentPOS[0], -1, pitchWidth + 1)
+      let onPitchY = common.isBetween(teamPlayer.currentPOS[1], -1, pitchHeight + 1)
+      if (onPitchX && onPitchY) {
+        let playerToPlayerX = player.currentPOS[0] - teamPlayer.currentPOS[0]
+        let playerToPlayerY = player.currentPOS[1] - teamPlayer.currentPOS[1]
+        let proximityToBall = Math.abs(playerToPlayerX + playerToPlayerY)
+        playersInDistance.push({
+          'position': teamPlayer.currentPOS,
+          'proximity': proximityToBall,
+          'name': teamPlayer.name
+        })
+      }
+    }
+  }
+  playersInDistance.sort(function(a, b) {
+    return a.proximity - b.proximity
+  })
+  return playersInDistance
+}
+
+function resolveBallMovement(player, matchDetails) {
+  const { kickOffTeam, secondTeam } = matchDetails
+  const ballPos = matchDetails.ball.position
+  const ballPow = matchDetails.ball.power || 0
+  const ballPath = matchDetails.ball.ballOverIterations
+  if (!ballPath || ballPath.length === 0) return matchDetails.ball.position
+  const nextPos = ballPath[0]
+  matchDetails.ball.ballOverIterations.shift()
+  matchDetails.ball.lastTouch.iterations++
+  const checkPos = [common.round(nextPos[0], 0), common.round(nextPos[1], 0), nextPos[2] || 0]
+  const playerInfo1 = setPositions.closestPlayerToPosition(player, kickOffTeam, checkPos)
+  const playerInfo2 = setPositions.closestPlayerToPosition(player, secondTeam, checkPos)
+  // mirofootball 设计修复(控球与home/away脱钩, 挂能力): 偏转/拦截归属——谁近谁得(站位);
+  // 平距时按【球员能力】(control+perception)高者得, 不再默认归 kickOffTeam(home)。→ 控球随能力分化, 不依赖 slot。
+  let _isTeam1Closer
+  if (playerInfo1.proxToBall !== playerInfo2.proxToBall) {
+    _isTeam1Closer = playerInfo1.proxToBall < playerInfo2.proxToBall
+  } else {
+    const _abil = pl => (pl && pl.skill) ? ((parseInt(pl.skill.control, 10) || 0) + (parseInt(pl.skill.perception, 10) || 0)) : 0
+    _isTeam1Closer = _abil(playerInfo1.thePlayer) >= _abil(playerInfo2.thePlayer)
+  }
+  const isTeam1Closer = _isTeam1Closer
+  const thisPlayer = isTeam1Closer ? playerInfo1.thePlayer : playerInfo2.thePlayer
+  const thisTeam = isTeam1Closer ? kickOffTeam : secondTeam
+
+  if (thisPlayer) thisPlayerIsInProximity(matchDetails, thisPlayer, ballPos, nextPos, ballPow, thisTeam)
+  matchDetails.ball.position = nextPos
+  return [common.round(nextPos[0], 2), common.round(nextPos[1], 2), common.round(nextPos[2] || 0, 2)]
+}
+
+function thisPlayerIsInProximity(matchDetails, thisPlayer, thisPOS, thisPos, power, thisTeam) {
+  let lastTouchPlayer = (thisPlayer.playerID == matchDetails.ball.lastTouch.playerID)
+  let ballRecentlyKicked = (matchDetails.ball.lastTouch.iterations < 4)
+  if (lastTouchPlayer && ballRecentlyKicked) return thisPOS
+  let checkPos = [common.round(thisPos[0], 0), common.round(thisPos[1], 0), common.round(thisPos[2], 0)]
+  let isGoalie = (thisPlayer.position === 'GK')
+  let jumpHeight = 10
+  //is this player close to the ball on x, y or z axis
+  const xPosProx = common.isBetween(thisPlayer.currentPOS[0], thisPos[0] - 6, thisPos[0] + 6)
+  const yPosProx = common.isBetween(thisPlayer.currentPOS[1], thisPos[1] - 6, thisPos[1] + 6)
+  const goaliexPosProx = common.isBetween(thisPlayer.currentPOS[0], thisPos[0] - 11, thisPos[0] + 11)
+  const goalieyPosProx = common.isBetween(thisPlayer.currentPOS[1], thisPos[1] - 2, thisPos[1] + 2)
+  const goaliezPodProx = common.isBetween(thisPOS[2], -1, (thisPlayer.height + thisPlayer.skill.jumping))
+
+  const playerJump = actions.playerJumps(thisPlayer.skill.perception)
+  if (playerJump) jumpHeight = common.getRandomNumber(10, thisPlayer.skill.jumping)
+  let calcHeight = (parseInt(thisPlayer.height, 10) + parseInt(jumpHeight, 10)) / 10
+  const zPosProx = common.isBetween(thisPos[2], -1, calcHeight)
+  if (isGoalie && goaliexPosProx && goalieyPosProx && goaliezPodProx) {
+    if (common.isBetween(checkPos[2], -1, calcHeight + 1)) {
+      let saving = thisPlayer.skill.saving || ''
+      if (saving && saving > common.getRandomNumber(0, power)) {
+        setBallMovementMatchDetails(matchDetails, thisPlayer, thisPos, thisTeam)
+        matchDetails.iterationLog.push(`Ball saved`)
+        thisPlayer.hasBall = true
+        matchDetails.ball.lastTouch.deflection = false
+        thisPlayer.stats.saves++
+        matchDetails.ball.position[2] = 0
+        matchDetails.endIteration = true
+        return thisPos
+      }
+    }
+  } else if (xPosProx && yPosProx && zPosProx) {
+    if (matchDetails.ball.lastTouch.playerID !== thisPlayer.playerID) {
+      let deflectPos = thisPlayer.currentPOS
+      let newPOS = resolveDeflection(power, thisPOS, deflectPos, thisPlayer, thisTeam.name, calcHeight, matchDetails)
+      return [common.round(newPOS[0], 2), common.round(newPOS[1], 2)]
+    }
+  }
+}
+
+function resolveDeflection(power, thisPOS, defPosition, defPlayer, defTeam, calcHeight, matchDetails) {
+  let xMovement = (thisPOS[0] - defPosition[0]) ** 2
+  let yMovement = (thisPOS[1] - defPosition[1]) ** 2
+  let movementDistance = Math.sqrt(xMovement + yMovement)
+  let newPower = Math.max(0, power - movementDistance)
+  let tempPosition = [0, 0, 0]
+  let { direction } = matchDetails.ball
+  if (newPower < 75) {
+    if (checkForHandball(thisPOS, defPlayer, calcHeight)) {
+      matchDetails.iterationLog.push(`Handball by ${defPlayer.name}`)
+      if (defTeam.name == matchDetails.kickOffTeam.name) setPositions.setSetpieceKickOffTeam(matchDetails)
+      else setPositions.setSetpieceSecondTeam(matchDetails)
+      return defPosition
+    }
+    if (checkIfBallControlled(defPlayer)) {
+      setDeflectionPlayerHasBall(thisPOS[2], matchDetails, defPlayer, defTeam)
+      return defPosition
+    }
+    newPower = common.round((newPower / 3), 0)
+  }
+  let bodyPart = setDeflectBodyPart(thisPOS, calcHeight)
+  matchDetails.ball.lastTouch.bodyPart = bodyPart
+  matchDetails.ball.lastTouch.deflection = true
+  matchDetails.iterationLog.push(`ball deflected by ${defPlayer.name} ${bodyPart}`)
+  defPlayer.hasBall = false
+  matchDetails.ball.Player = ''
+  matchDetails.ball.withPlayer = false
+  matchDetails.ball.withTeam = ''
+  tempPosition = setDeflectionDirectionPos(direction, defPosition, newPower)
+  let lastTeam = matchDetails.ball.lastTouch.teamID
+  matchDetails = setPositions.keepInBoundaries(matchDetails, lastTeam.name, tempPosition)
+  let intended = matchDetails.ballIntended
+  let lastPOS = (intended) ? intended.map(x => x) : matchDetails.ball.position.map(x => x)
+  delete matchDetails.ballIntended
+  matchDetails.endIteration = true
+  return lastPOS
+}
+
+function setBallMovementMatchDetails(matchDetails, thisPlayer, thisPos, thisTeam) {
+  matchDetails.ball.ballOverIterations = []
+  matchDetails.ball.Player = thisPlayer.playerID
+  matchDetails.ball.withPlayer = true
+  matchDetails.ball.lastTouch.playerName = thisPlayer.name
+  matchDetails.ball.lastTouch.playerID = thisPlayer.playerID
+  matchDetails.ball.lastTouch.teamID = thisTeam.teamID
+  matchDetails.ball.withTeam = thisTeam.teamID
+  let tempArray = thisPos
+  matchDetails.ball.position = tempArray.map(x => x)
+  thisPlayer.currentPOS = tempArray.map(x => x)
+}
+
+function checkForHandball(thisPOS, calcHeight) {
+  const ratio = thisPOS[2] / calcHeight
+  if (ratio <= 0.5) return Math.random() < 0.08
+  else if (ratio <= 0.8) return Math.random() < 0.35
+  return Math.random() < 0.18
+}
+
+function setAttackBodyPart(thisPOS, calcHeight) {
+  const playerHeightInPitchUnits = calcHeight / 10
+  const ratio = thisPOS[2] / playerHeightInPitchUnits
+  let lowerBody = ['left of foot', 'right of foot', 'centre of foot']
+  if (ratio <= 0.5) return lowerBody[common.getRandomNumber(0, lowerBody.length - 1)]
+  return 'head'
+}
+
+function setDeflectBodyPart(thisPOS, calcHeight) {
+  const ratio = thisPOS[2] / calcHeight
+  let lowerBody = ['foot', 'shin', 'knee', 'thigh', 'hip', 'bum']
+  let midBody = ['stomach', 'back', 'chest', 'shoulder']
+  if (thisPOS[2] == 0) return 'foot'
+  else if (ratio <= 0.5) return lowerBody[common.getRandomNumber(0, lowerBody.length - 1)]
+  else if (ratio <= 0.8) return midBody[common.getRandomNumber(0, midBody.length - 1)]
+  return 'head'
+}
+
+function setDeflectionDirectionPos(direction, defPosition, newPower) {
+  let tempPosition = [0, 0, 0]
+  if (direction === `east` || direction === `northeast` || direction === `southeast`) {
+    if (direction === `east`) tempPosition[1] = common.getRandomNumber(defPosition[1] - 3, defPosition[1] + 3)
+    tempPosition[0] = defPosition[0] - (newPower / 2)
+  } else if (direction === `west` || direction === `northwest` || direction === `southwest`) {
+    if (direction === `west`) tempPosition[1] = common.getRandomNumber(defPosition[1] - 3, defPosition[1] + 3)
+    tempPosition[0] = defPosition[0] + (newPower / 2)
+  }
+  if (direction === `north` || direction === `northeast` || direction === `northwest`) {
+    if (direction === `north`) tempPosition[0] = common.getRandomNumber(defPosition[0] - 3, defPosition[0] + 3)
+    tempPosition[1] = defPosition[1] + (newPower / 2)
+  } else if (direction === `south` || direction === `southeast` || direction === `southwest`) {
+    if (direction === `south`) tempPosition[0] = common.getRandomNumber(defPosition[0] - 3, defPosition[0] + 3)
+    tempPosition[1] = defPosition[1] - (newPower / 2)
+  }
+  if (direction === `wait`) {
+    tempPosition[0] = common.getRandomNumber(-newPower / 2, newPower / 2)
+    tempPosition[1] = common.getRandomNumber(-newPower / 2, newPower / 2)
+  }
+  return tempPosition
+}
+
+function setDeflectionPlayerHasBall(ballHeight, matchDetails, defPlayer, defTeam) {
+  matchDetails.iterationLog.push(`${defPlayer.name} has the ball`)
+  // mirofootball 传球成功率: 拦截/偏转路径也消耗 passInProgress(此时 lastTouch 仍是传球者), 防 stale 误计
+  if (matchDetails.ball.passInProgress) {
+    let _pid = matchDetails.ball.lastTouch.playerID, _ptid = matchDetails.ball.lastTouch.teamID
+    if (_pid && _pid !== defPlayer.playerID) {
+      let _pt = (_ptid == matchDetails.kickOffTeam.teamID) ? matchDetails.kickOffTeam : matchDetails.secondTeam
+      let _passer = _pt.players.find(p => p.playerID === _pid)
+      if (_passer && _passer.stats && _passer.stats.passes) {
+        if (_ptid === defTeam.teamID) _passer.stats.passes.on++
+        else _passer.stats.passes.off++
+      }
+    }
+    matchDetails.ball.passInProgress = false
+  }
+  defPlayer.hasBall = true
+  matchDetails.ball.lastTouch.playerName = defPlayer.name
+  matchDetails.ball.lastTouch.playerID = defPlayer.playerID
+  matchDetails.ball.lastTouch.teamID = defTeam.teamID
+  matchDetails.ball.lastTouch.deflection = false
+  if (defPlayer.offside == true) {
+    setDeflectionPlayerOffside(matchDetails, defTeam, defPlayer)
+    return matchDetails.ball.position
+  }
+  matchDetails.ball.ballOverIterations = []
+  matchDetails.ball.Player = defPlayer.playerID
+  matchDetails.ball.withPlayer = true
+  matchDetails.ball.withTeam = defTeam.teamID
+  let tempArray = defPlayer.currentPOS
+  matchDetails.ball.position = tempArray.map(x => x)
+  matchDetails.ball.position[2] = ballHeight
+  matchDetails.endIteration = true
+}
+
+function setDeflectionPlayerOffside(matchDetails, defTeam, defPlayer) {
+  defPlayer.offside = false
+  defPlayer.hasBall = false
+  matchDetails.ball.Player = ''
+  matchDetails.ball.withPlayer = false
+  matchDetails.ball.withTeam = ''
+  matchDetails.iterationLog.push(`${defPlayer.name} is offside. Set piece given`)
+  if (defTeam.name == matchDetails.kickOffTeam.name) matchDetails = setPositions.setSetpieceSecondTeam(matchDetails)
+  else matchDetails = setPositions.setSetpieceKickOffTeam(matchDetails)
+}
+
+function getBallDirection(matchDetails, nextPOS) {
+  let thisPOS = matchDetails.ball.position
+  let movementX = thisPOS[0] - nextPOS[0]
+  let movementY = thisPOS[1] - nextPOS[1]
+  if (movementX === 0) {
+    if (movementY === 0) matchDetails.ball.direction = `wait`
+    else if (movementY < 0) matchDetails.ball.direction = `south`
+    else if (movementY > 0) matchDetails.ball.direction = `north`
+  } else if (movementY === 0) {
+    if (movementX < 0) matchDetails.ball.direction = `east`
+    else if (movementX > 0) matchDetails.ball.direction = `west`
+  } else if (movementX < 0 && movementY < 0) matchDetails.ball.direction = `southeast`
+  else if (movementX > 0 && movementY > 0) matchDetails.ball.direction = `northwest`
+  else if (movementX > 0 && movementY < 0) matchDetails.ball.direction = `southwest`
+  else if (movementX < 0 && movementY > 0) matchDetails.ball.direction = `northeast`
+}
+
+function ballPassed(matchDetails, team, player) {
+  const { pitchSize } = matchDetails
+  const pitchHeight = pitchSize[1]
+  const ballPos = matchDetails.ball.position
+
+  matchDetails.ball.lastTouch.playerName = player.name
+  matchDetails.ball.lastTouch.playerID = player.playerID
+  matchDetails.ball.lastTouch.teamID = team.teamID
+  matchDetails.ball.lastTouch.iterations = 0
+  matchDetails.iterationLog.push(`ball passed by: ${player.name}`)
+  player.stats.passes.total++
+  matchDetails.ball.passInProgress = true   // mirofootball: 标记传球进行中, 接球时判 on/off
+
+  const power = common.calculatePower(player.skill.strength, pitchHeight)
+  const maxDist = power
+
+  let teammates = getPlayersInDistance(team, player, pitchSize)
+  if (!teammates || teammates.length === 0) return matchDetails
+
+  let reachable = teammates.filter(p => {
+    const d = common.distance(ballPos, p.position)
+    const markingBoost = p.isMarked ? 1 : 1.15
+    return d <= maxDist * markingBoost
+  })
+
+  // If nobody reachable, choose closest fallback
+  if (reachable.length === 0) {
+    reachable = teammates.sort((a, b) =>
+      common.distance(ballPos, a.position) - common.distance(ballPos, b.position))
+  }
+
+  const aTop = player.originPOS[1] > (pitchHeight / 2)
+
+  reachable.sort((a, b) => passScoreOption(b, aTop, ballPos, maxDist) - passScoreOption(a, aTop, ballPos, maxDist))
+  const targetPlayer = reachable[0]
+  matchDetails.iterationLog.push(`Target selected: ${targetPlayer.name}`)
+
+  const accuracyFactor = (100 - player.skill.passing) / 100
+  // mirofootball 校准: 原散布可达 ±19 > 接球半径 ±6 → 传球落空成散球。封顶到 ≤6 让传球真能被接到(控球串联↑/散球↓)
+  const spread = Math.min(6, maxDist * 0.04 * accuracyFactor)
+
+  const targetX = targetPlayer.position[0] + common.getRandomNumber(-spread, spread)
+  const targetY = targetPlayer.position[1] + common.getRandomNumber(-spread, spread)
+  const finalTarget = [common.round(targetX, 0), common.round(targetY, 0)]
+  const calcHeight = parseInt(player.height, 10) + parseInt((player.skill.jumping || 0), 10)
+  const bodyPart = setAttackBodyPart(matchDetails.ball.position, calcHeight)
+  matchDetails.ball.lastTouch.bodyPart = bodyPart
+  return calcBallMovementOverTime(matchDetails, power, finalTarget, player, 'pass')
+}
+
+function passScoreOption(p, aTop, ballPos, maxDistance) {
+  let score = 0
+  const d = common.distance(ballPos, p.position)
+  const forward = aTop ? ballPos[1] - p.position[1] : p.position[1] - ballPos[1]
+  score += forward * 2
+  // Prefer medium-range passes
+  score -= Math.abs(d - (0.5 * maxDistance))
+  // Prefer unmarked players
+  if (!p.isMarked) score += 40
+  return score
+}
+
+function setTargetPlyPos(tplyr, lowX, highX, lowY, highY) {
+  let closePlyPos = [0, 0]
+  let [targetPlayerXPos, targetPlayerYPos] = tplyr
+  closePlyPos[0] = common.round(targetPlayerXPos + common.getRandomNumber(lowX, highX), 0)
+  closePlyPos[1] = common.round(targetPlayerYPos + common.getRandomNumber(lowY, highY), 0)
+  return closePlyPos
+}
+
+function getTargetPlayer(playersArray, side, pitchHeight) {
+  let tempArray = []
+  for (let tempPlayer of playersArray) {
+    if (tempPlayer.proximity < (pitchHeight / 2)) tempArray.push(tempPlayer)
+  }
+  if (tempArray.length === 0) tempArray = playersArray
+  let thisRand = common.getRandomNumber(0, (tempArray.length - 1))
+  let thisPlayer = tempArray[thisRand]
+  if (thisRand > 5) thisRand = common.getRandomNumber(0, (tempArray.length - 1))
+  if (side == 'top' && tempArray[thisRand].proximity > thisPlayer.proximity) {
+    thisPlayer = tempArray[thisRand]
+  } else if (side == 'bottom' && tempArray[thisRand].proximity < thisPlayer.proximity) {
+    thisPlayer = tempArray[thisRand]
+  }
+  if (thisRand > 5) thisRand = common.getRandomNumber(0, (tempArray.length - 1))
+  if (side == 'top' && tempArray[thisRand].proximity > thisPlayer.proximity) {
+    thisPlayer = tempArray[thisRand]
+  } else if (side == 'bottom' && tempArray[thisRand].proximity < thisPlayer.proximity) {
+    thisPlayer = tempArray[thisRand]
+  }
+  return thisPlayer
+}
+
+function ballCrossed(matchDetails, team, player) {
+  const { pitchSize } = matchDetails
+  const [pitchWidth, pitchHeight] = pitchSize
+  const ballPos = matchDetails.ball.position
+
+  matchDetails.ball.lastTouch.playerName = player.name
+  matchDetails.ball.lastTouch.playerID = player.playerID
+  matchDetails.ball.lastTouch.teamID = team.teamID
+
+  matchDetails.iterationLog.push(`ball crossed by: ${player.name}`)
+  player.stats.passes.total++
+  matchDetails.ball.passInProgress = true   // mirofootball: 标记传球进行中, 接球时判 on/off
+
+  const power = common.calculatePower(player.skill.strength, pitchHeight)
+  const maxDistance = power
+
+  const aTop = player.originPOS[1] > (pitchHeight / 2)
+  let lowerPitch = pitchHeight * 0.2
+  let upperPitch = pitchHeight * 0.8
+  let targetY = aTop ? common.getRandomNumber(0, lowerPitch) : common.getRandomNumber(upperPitch, pitchHeight)
+  let targetX
+  if (player.currentPOS[0] < (pitchWidth / 2)) targetX = common.getRandomNumber(pitchWidth * 0.4, pitchWidth * 0.9)
+  targetX = common.getRandomNumber(pitchWidth * 0.1, pitchWidth * 0.6)
+
+  const intended = [targetX, targetY]
+  const d = common.distance(ballPos, intended)
+  let finalTarget = intended
+  if (d > maxDistance) {
+    const ratio = maxDistance / d
+    finalTarget = [
+      ballPos[0] + (targetX - ballPos[0]) * ratio,
+      ballPos[1] + (targetY - ballPos[1]) * ratio,
+      0
+    ]
+  }
+  const crossingSkill = player.skill.crossing || player.skill.passing || 50
+  const accuracyFactor = (100 - crossingSkill) / 100
+  const spread = maxDistance * 0.25 * accuracyFactor
+  finalTarget = [
+    common.round(finalTarget[0] + common.getRandomNumber(-spread, spread), 0),
+    common.round(finalTarget[1] + common.getRandomNumber(-spread, spread), 0)
+  ]
+  const bodyPart = setAttackBodyPart([0, 0, 0], 100)
+  matchDetails.ball.lastTouch.bodyPart = bodyPart
+  console.log(finalTarget)
+  let temp = calcBallMovementOverTime(matchDetails, power * 1.1, finalTarget, player, 'cross')
+  return temp
+}
+
+
+function calcBallMovementOverTime(matchDetails, power, nextPosition, player, type) {
+  const { pitchSize } = matchDetails
+  const pitchHeight = pitchSize[1]
+  const thisPOS = matchDetails.ball.position
+  const trajectory = common.getBallTrajectory(thisPOS, nextPosition, power, type, pitchHeight)
+  matchDetails.ball.ballOverIterations = trajectory
+  matchDetails.iterationLog.push(`creating new ball movement`)
+  common.removeBallFromAllPlayers(matchDetails)
+  matchDetails.endIteration = true
+  return resolveBallMovement(player, matchDetails)
+}
+
+function splitNumberIntoN(number, n) {
+  const arrayN = Array.from(Array(n).keys())
+  let splitNumber = []
+  for (let thisn of arrayN) {
+    let nextNum = common.aTimesbDividedByC((n - thisn), number, n)
+    if (nextNum === 0) splitNumber.push(1)
+    else splitNumber.push(common.round((nextNum), 0))
+  }
+  return splitNumber
+}
+
+function mergeArrays(arrayLength, oldPos, newPos, array1, array2, array3) {
+  let tempPos = [oldPos[0], oldPos[1]]
+  const arrayN = Array.from(Array(arrayLength - 1).keys())
+  let newArray = []
+  for (let thisn of arrayN) {
+    newArray.push([tempPos[0] + array1[thisn], tempPos[1] + array2[thisn], array3[thisn]])
+    tempPos = [tempPos[0] + array1[thisn], tempPos[1] + array2[thisn]]
+  }
+  newArray.push([newPos[0], newPos[1], array3[array3.length - 1]])
+  return newArray
+}
+
+function checkIfBallControlled(player) {
+  if (common.isBetween(common.getRandomNumber(0, 100), 0, player.skill.control)) return true
+  return false
+}
+
+module.exports = {
+  ballKicked,
+  shotMade,
+  penaltyTaken,
+  throughBall,
+  resolveBallMovement,
+  resolveDeflection,
+  getBallDirection,
+  ballPassed,
+  ballCrossed,
+  moveBall,
+  mergeArrays,
+  splitNumberIntoN,
+  calcBallMovementOverTime,
+  setDeflectionDirectionPos,
+  setDeflectionPlayerOffside,
+  getTargetPlayer,
+  setDeflectionPlayerHasBall,
+  setBallMovementMatchDetails,
+  thisPlayerIsInProximity,
+  setTargetPlyPos,
+  setBPlayer,
+  checkGoalScored,
+  getTopKickedPosition,
+  getBottomKickedPosition
+}

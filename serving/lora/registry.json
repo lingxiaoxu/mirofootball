@@ -1,0 +1,487 @@
+{
+ "algeria": {
+  "team": "algeria",
+  "model": "gemma-algeria",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "argentina": {
+  "team": "argentina",
+  "model": "gemma-argentina",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "australia": {
+  "team": "australia",
+  "model": "gemma-australia",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "austria": {
+  "team": "austria",
+  "model": "gemma-austria",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "belgium": {
+  "team": "belgium",
+  "model": "gemma-belgium",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "bosniaandherzegovina": {
+  "team": "bosniaandherzegovina",
+  "model": "gemma-bosniaandherzegovina",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "brazil": {
+  "team": "brazil",
+  "model": "gemma-brazil",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "canada": {
+  "team": "canada",
+  "model": "gemma-canada",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "capeverde": {
+  "team": "capeverde",
+  "model": "gemma-capeverde",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "colombia": {
+  "team": "colombia",
+  "model": "gemma-colombia",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "cotedivoire": {
+  "team": "cotedivoire",
+  "model": "gemma-cotedivoire",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "croatia": {
+  "team": "croatia",
+  "model": "gemma-croatia",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "curacao": {
+  "team": "curacao",
+  "model": "gemma-curacao",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "czechia": {
+  "team": "czechia",
+  "model": "gemma-czechia",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "drcongo": {
+  "team": "drcongo",
+  "model": "gemma-drcongo",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "ecuador": {
+  "team": "ecuador",
+  "model": "gemma-ecuador",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "egypt": {
+  "team": "egypt",
+  "model": "gemma-egypt",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "england": {
+  "team": "england",
+  "model": "gemma-england",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "france": {
+  "team": "france",
+  "model": "gemma-france",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "germany": {
+  "team": "germany",
+  "model": "gemma-germany",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "ghana": {
+  "team": "ghana",
+  "model": "gemma-ghana",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "haiti": {
+  "team": "haiti",
+  "model": "gemma-haiti",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "iran": {
+  "team": "iran",
+  "model": "gemma-iran",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "iraq": {
+  "team": "iraq",
+  "model": "gemma-iraq",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "japan": {
+  "team": "japan",
+  "model": "gemma-japan",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "jordan": {
+  "team": "jordan",
+  "model": "gemma-jordan",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "korearepublic": {
+  "team": "korearepublic",
+  "model": "gemma-korearepublic",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "mexico": {
+  "team": "mexico",
+  "model": "gemma-mexico",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "morocco": {
+  "team": "morocco",
+  "model": "gemma-morocco",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "netherlands": {
+  "team": "netherlands",
+  "model": "gemma-netherlands",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "newzealand": {
+  "team": "newzealand",
+  "model": "gemma-newzealand",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "norway": {
+  "team": "norway",
+  "model": "gemma-norway",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "panama": {
+  "team": "panama",
+  "model": "gemma-panama",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "paraguay": {
+  "team": "paraguay",
+  "model": "gemma-paraguay",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "portugal": {
+  "team": "portugal",
+  "model": "gemma-portugal",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "qatar": {
+  "team": "qatar",
+  "model": "gemma-qatar",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "saudiarabia": {
+  "team": "saudiarabia",
+  "model": "gemma-saudiarabia",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "scotland": {
+  "team": "scotland",
+  "model": "gemma-scotland",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "senegal": {
+  "team": "senegal",
+  "model": "gemma-senegal",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "southafrica": {
+  "team": "southafrica",
+  "model": "gemma-southafrica",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "spain": {
+  "team": "spain",
+  "model": "gemma-spain",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "sweden": {
+  "team": "sweden",
+  "model": "gemma-sweden",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "switzerland": {
+  "team": "switzerland",
+  "model": "gemma-switzerland",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "tunisia": {
+  "team": "tunisia",
+  "model": "gemma-tunisia",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "turkey": {
+  "team": "turkey",
+  "model": "gemma-turkey",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "unitedstates": {
+  "team": "unitedstates",
+  "model": "gemma-unitedstates",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "uruguay": {
+  "team": "uruguay",
+  "model": "gemma-uruguay",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "uzbekistan": {
+  "team": "uzbekistan",
+  "model": "gemma-uzbekistan",
+  "deployed": true,
+  "source": "fc26_comprehensive",
+  "daemons": [
+   11436,
+   11437
+  ]
+ },
+ "_meta": {
+  "count": 48,
+  "data": "EA FC26 + API + Mac style",
+  "note": "48队comprehensive, 覆盖旧8"
+ }
+}
